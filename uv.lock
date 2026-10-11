@@ -12,6 +12,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "packaging" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
@@ -22,6 +23,7 @@ requires-dist = [{ name = "textual", specifier = ">=8.2.8" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "packaging", specifier = ">=24" },
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.6" },
