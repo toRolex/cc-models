@@ -11,7 +11,7 @@ dependencies = [
 cc-models = "cc_models.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.6"]
+dev = ["pytest>=8.3", "ruff>=0.6", "pyright>=1.1.414"]
 
 [build-system]
 requires = ["hatchling"]
@@ -38,6 +38,11 @@ testpaths = ["tests"]
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
 
 [tool.ruff]
 line-length = 100

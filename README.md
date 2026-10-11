@@ -76,6 +76,24 @@ uv run cc-models restore --backup /path/to/backup --yes
 
 本工具只请求模型目录，不发送聊天或模型能力测试请求。模型调用是否可用仍由 CPA 上游决定。
 
+## 质量门
+
+`./scripts/verify.sh` 统一执行以下门，任何一步失败即停止（不降级、不 continue-on-error）：
+
+1. **锁定同步**：`uv sync --locked`，所有 uv 调用取消环境变量 `UV_INDEX`（可能是明文 HTTP 源）并加 `--locked` 防止后续命令重新解析依赖；开发工具（pytest、ruff、pyright）全部锁定在 `dev` 依赖组，不临时 `uv --with` 安装。
+2. **Lint**：`ruff check .`。
+3. **格式检查**：`ruff format --check .`。
+4. **类型检查**：`pyright`，`typeCheckingMode = "basic"`（非 off，非 strict），`include = ["src", "tests", "scripts"]`，`pythonVersion = "3.11"`；配置在 `pyproject.toml` 的 `[tool.pyright]`，不使用全局 ignore 或 `report*=none` 消错。
+5. **测试**：`pytest -q`。
+6. **构建**：`uv build` 输出到 `mktemp` 临时目录，脚本 `trap` 自清理。
+7. **验包**：`scripts/check_dist.py`（纯 stdlib）校验 sdist/wheel：文件名版本与 `pyproject` 一致且无本地版本段、sdist 条目不超白名单、不含本地/机器元数据（.jj/.git/.agents/.pi/.venv/__pycache__/direct_url.json 等）、wheel 含全部必要 `cc_models` 模块。不是仅 twine metadata 检查。
+
+测试配套见 `tests/test_check_dist.py`，含本地元数据、超白名单、本地版本段、缺模块等负例。
+
+## CI
+
+GitHub Actions（`.github/workflows/ci.yml`）：`pull_request` / `push main` / `workflow_dispatch` 触发；Ubuntu 上 Python 3.11 与 3.13 matrix；`contents: read` 最小权限；`concurrency` 取消同分支旧 run；`actions/checkout` 与 `astral-sh/setup-uv` 固定 commit SHA；调用同一 `./scripts/verify.sh`；设合理 timeout，无 continue-on-error，不使用 pull_request_target。
+
 ## 验证
 
 ```sh
