@@ -1,0 +1,25 @@
+# Local credentials and user configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+settings.json
+config.yaml
+state.json
+backups/
+*.bak
+# Build and test artifacts
+node_modules/
+dist/
+coverage/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.DS_Store
+# Local agent artifacts
+.agents/
+TASKS.md
