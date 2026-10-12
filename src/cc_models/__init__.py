@@ -47,7 +47,7 @@ from .settings import (
 )
 from .store import LocalState, cache_for_endpoint, load_state, record_fetch, save_selection
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
