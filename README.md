@@ -1,6 +1,18 @@
-# cc-models
+<p align="center">
+  <img src="docs/assets/icon-128.png" alt="cc-models 图标" width="128" />
+</p>
+
+<h1 align="center">cc-models</h1>
 
 在终端里选择 CPA 模型，生成 Claude Code 的模型菜单。模型请求使用原始 ID，显示名称独立编辑。
+
+<p align="center">
+  <img src="docs/assets/screenshot-model-list.png" alt="模型列表主界面（演示模式）" width="720" />
+  <br />
+  <img src="docs/assets/screenshot-preview.png" alt="应用预览弹窗（演示模式）" width="720" />
+  <br />
+  <sub>以上为演示模式，通过 Textual Pilot 操作并导出终端画面，不是系统窗口截图。</sub>
+</p>
 
 它是一个配置管理工具，不是代理：不转发请求，不修改 CPA 上游，也不是 CC Switch 的替代品。CC Switch 管理多个工具的整套 provider 配置；cc-models 管理 Claude Code 的 `modelPicker`，也可显式设置默认 `model`。
 
@@ -12,7 +24,13 @@
 brew install toRolex/tap/cc-models
 ```
 
-> 发布状态：tap 仓库 `toRolex/homebrew-tap` 尚未创建，当前访问 404。v0.1.1 发布并建好 tap 后这条命令即可用；在此之前可用下面的本地源码安装。
+已安装旧版本的用户升级：
+
+```sh
+brew update && brew upgrade toRolex/tap/cc-models
+```
+
+安装完成后可用 `cc-models --version` 确认版本（当前为 0.1.1）。
 
 ### 本地源码安装（Unix，无需发布 Release）
 
