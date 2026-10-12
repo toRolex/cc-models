@@ -2,13 +2,39 @@
 
 在终端里选择 CPA 模型，生成 Claude Code 的模型菜单。模型请求使用原始 ID，显示名称独立编辑。本工具不是代理，不修改 CPA 上游。
 
-## 启动
+## 安装
 
-需要 Python 3.11+ 和 uv。当前文件锁实现面向 Unix，未验证 Windows。
+**macOS（Homebrew）。** 目前还没有发布过 GitHub Release，也没有远端 tap 仓库。发布后，通过本地临时 tap 从 release 的 formula 资产安装（formula 随 release 上传，无需同步任何远端 tap）：
+
+```sh
+# 以 v0.1.0 为例，替换为实际已发布的版本
+brew tap-new "$USER"/cc-models
+mkdir -p "$(brew --repository "$USER"/cc-models)/Formula"
+curl -fsSL -o "$(brew --repository "$USER"/cc-models)/Formula/cc-models.rb" \
+  https://github.com/toRolex/cc-models/releases/download/v0.1.0/cc-models.rb
+brew install "$USER"/cc-models/cc-models
+```
+
+原理：release workflow 在推送 `v<版本>` 标签时构建并校验 sdist/wheel，从本次构建的真实产物生成 `Formula/cc-models.rb` 与 `dist/checksums.txt` 并随 release 上传。formula 的 url 指向 `https://github.com/toRolex/cc-models/releases/download/v<版本>/cc_models-<版本>.tar.gz`，其 sha256 就是该 sdist 本身的校验和，因此从 release 资产安装不存在哈希错位问题。仓库里提交的 `Formula/cc-models.rb` 只是最近一次本地生成的快照（供 `--check` 门与阅读），不是 tap。上述命令在首次 Release 发布前会因下载 404 失败；任意平台可先用下面的本地源码安装。
+
+**本地源码安装，无需发布 Release。** 当前仅验证 Unix 环境。 从源码直接安装可用的命令行入口：
+
+```sh
+pipx install .
+# 或
+uv tool install .
+```
+
+安装后直接使用 `cc-models` 命令：
+
+```sh
+cc-models --demo
+```
+
+开发环境用 uv 同步依赖：
 
 ```sh
 uv sync --group dev
-uv run cc-models --demo
 ```
 
 演示模式只使用临时配置和固定目录，不访问网络。退出后不影响真实 Claude Code 配置。
@@ -20,7 +46,7 @@ uv run cc-models --demo
 ```sh
 read -s CPA_API_KEY
 export CPA_API_KEY
-uv run cc-models
+cc-models
 ```
 
 默认读取 `~/.claude/settings.json`。配置文件必须已存在，且是严格 JSON 对象。启动时仅在本地状态文件不存在时导入已有 `modelPicker`。本地状态默认保存在 `~/.cc-models`。
@@ -30,8 +56,8 @@ uv run cc-models
 命令行也可临时覆盖地址。所有全局选项放在子命令之前。
 
 ```sh
-uv run cc-models --base-url https://example.com/v1 refresh
-uv run cc-models --settings /path/to/user-config.json --state-dir /path/to/local-state list
+cc-models --base-url https://example.com/v1 refresh
+cc-models --settings /path/to/user-config.json --state-dir /path/to/local-state list
 ```
 
 非回环 HTTP 地址必须显式允许明文传输。TUI 配置提供确认选项，CLI 使用 `--allow-insecure-http`。不要向不可信地址发送凭据。重定向被拒绝。
@@ -62,12 +88,12 @@ uv run cc-models --settings /path/to/user-config.json --state-dir /path/to/local
 ## 预览、备份和恢复
 
 ```sh
-uv run cc-models list
-uv run cc-models refresh
-uv run cc-models apply --dry-run
-uv run cc-models apply --yes
-uv run cc-models backups
-uv run cc-models restore --backup /path/to/backup --yes
+cc-models list
+cc-models refresh
+cc-models apply --dry-run
+cc-models apply --yes
+cc-models backups
+cc-models restore --backup /path/to/backup --yes
 ```
 
 应用前在配置文件旁创建权限为 0600 的备份，再原子替换。恢复会还原整个配置文件，包括非受管字段，并先备份当前内容。恢复入口目前是 CLI。
@@ -84,9 +110,10 @@ uv run cc-models restore --backup /path/to/backup --yes
 2. **Lint**：`ruff check .`。
 3. **格式检查**：`ruff format --check .`。
 4. **类型检查**：`pyright`，`typeCheckingMode = "basic"`（非 off，非 strict），`include = ["src", "tests", "scripts"]`，`pythonVersion = "3.11"`；配置在 `pyproject.toml` 的 `[tool.pyright]`，不使用全局 ignore 或 `report*=none` 消错。
-5. **测试**：`pytest -q`。
-6. **构建**：`uv build` 输出到 `mktemp` 临时目录，脚本 `trap` 自清理。
-7. **验包**：`scripts/check_dist.py`（纯 stdlib）校验 sdist/wheel：文件名版本与 `pyproject` 一致且无本地版本段、sdist 条目不超白名单、不含本地/机器元数据（.jj/.git/.agents/.pi/.venv/__pycache__/direct_url.json 等）、wheel 含全部必要 `cc_models` 模块。不是仅 twine metadata 检查。
+5. **构建**：`uv build` 输出到固定的 `dist/`（先清空），在 pytest 之前执行，保证安装型测试、formula 生成与 release 上传使用同一批产物。
+6. **验包**：`scripts/check_dist.py` 校验 sdist/wheel：文件名版本与 `pyproject` 一致且无本地版本段、sdist 条目不超白名单、不含本地/机器元数据（.jj/.git/.agents/.pi/.venv/__pycache__/direct_url.json 等）、wheel 含全部必要 `cc_models` 模块。不是仅 twine metadata 检查。
+7. **formula 生成**：`scripts/gen_formula.py` 从 `dist/` 真实产物重新生成 `Formula/cc-models.rb` 与 `dist/checksums.txt`（formula 摘要即本次构建 sdist 的 sha256）。
+8. **测试**：`pytest -q`（其中安装型测试用 `uv pip install` 把 `dist/` 里的真实 wheel 装进一次性 venv，并断言打包后的 `cc-models` 入口）。
 
 测试配套见 `tests/test_check_dist.py`，含本地元数据、超白名单、本地版本段、缺模块等负例。
 

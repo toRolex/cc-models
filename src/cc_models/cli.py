@@ -14,6 +14,7 @@ import argparse
 import json
 import sys
 import time
+from importlib import metadata
 from pathlib import Path
 
 from .domain import CoreError, DriftError, EndpointError, parse_strict_json
@@ -55,6 +56,11 @@ def _add_global_args(parser: argparse.ArgumentParser) -> None:
         help="允许远程明文 HTTP 端点（凭据将经明文传输，需显式确认）",
     )
     parser.add_argument("--demo", action="store_true", help="使用确定性临时演示数据，不访问网络")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=metadata.version("cc-models"),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -1,0 +1,84 @@
+name: Release
+
+# Build on v* tags only. Publish verified sdist/wheel, checksums, and the
+# generated formula: a release-state guard classifies the tag before any
+# upload (public release = hard fail, draft retry = rerun), upload is
+# idempotent, then publish. A repeated run never exposes a partial public
+# release and never replaces an already public one.
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write # attest-build-provenance signs provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Guard tag against pyproject version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag != pyproject version $version" >&2
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Quality gates
+        run: ./scripts/verify.sh
+
+      - name: Generate formula and checksums from built artifacts
+        run: env -u UV_INDEX uv run --locked python scripts/gen_formula.py
+
+      - name: Attest build provenance
+        uses: >-
+          actions/attest-build-provenance@9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad
+        # attest-build-provenance v3
+        with:
+          subject-path: |
+            dist/cc_models-*.tar.gz
+            dist/cc_models-*.whl
+
+      # Classify the release before any upload: 404 -> none (create draft),
+      # existing draft -> only a rerun (run_attempt > 1) may clobber it, an
+      # existing public release -> hard fail before any upload. Any other
+      # gh api failure fails the job instead of reading as "absent".
+      - name: Guard release state, then upload to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          clobber=""
+          if [ "${{ github.run_attempt }}" -gt 1 ]; then clobber="--clobber"; fi
+          state="$(scripts/check_release_state.sh "$GITHUB_REF_NAME" $clobber)"
+          if [ "$state" = "none" ]; then
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag --draft --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/cc_models-*.tar.gz \
+            dist/cc_models-*.whl \
+            dist/checksums.txt \
+            Formula/cc-models.rb
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: | # only reached when the guard confirmed no public release exists
+          gh release edit "$GITHUB_REF_NAME" --draft=false

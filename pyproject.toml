@@ -11,7 +11,7 @@ dependencies = [
 cc-models = "cc_models.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.6", "pyright>=1.1.414"]
+dev = ["pytest>=8.3", "ruff>=0.6", "pyright>=1.1.414", "packaging>=24"]
 
 [build-system]
 requires = ["hatchling"]
