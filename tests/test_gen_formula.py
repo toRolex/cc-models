@@ -119,7 +119,9 @@ def test_generated_formula_and_checksums_are_consistent(tmp_path: Path, monkeypa
     """End to end: formula digest must equal the real sdist digest in checksums.txt."""
     dist = tmp_path / "dist"
     dist.mkdir()
-    version = "0.1.0"
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
     sdist = dist / f"cc_models-{version}.tar.gz"
     wheel = dist / f"cc_models-{version}-py3-none-any.whl"
     sdist.write_bytes(b"fake sdist bytes")
