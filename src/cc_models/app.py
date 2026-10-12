@@ -423,9 +423,7 @@ class DriftModal(ModalScreen[str]):
         self.dismiss("cancel")
 
 
-# One table row: (model_id, selected, missing). Kept as a plain tuple so the
-# row shape stays identical to the previous inline annotations.
-RowMeta = tuple[str, bool, bool]
+RowMeta = tuple[str, bool, bool]  # (model_id, selected, missing)
 
 
 class EmptyReason(StrEnum):
@@ -477,7 +475,12 @@ def project_table(
     filter_text: str,
     fetch_state: FetchState,
 ) -> TableView:
-    """Derive the visible rows and, when there are none, why the table is empty."""
+    """Derive the visible rows and, when there are none, why the table is empty.
+
+    The reason is the first match in this order: rows visible, a filter hid
+    real rows, a refresh running, the last refresh failed, no catalog, an
+    empty catalog.
+    """
     selected = {opt.model: opt for opt in selection.options}
     ordered: list[RowMeta] = []
     for opt in selection.options:
@@ -642,9 +645,10 @@ class CCModelsApp(App):
         Binding("ctrl+p", "command_palette", "命令/主题", show=False, key_display="^p"),
     ]
 
-    def __init__(self, ctx: SessionContext) -> None:
+    def __init__(self, ctx: SessionContext, *, fetch_on_start: bool = False) -> None:
         super().__init__()
         self.ctx = ctx
+        self._fetch_on_start = fetch_on_start
         self._filter_text = ""
         self._refresh_generation = 0
         self._fetch_state = FetchState.IDLE
@@ -686,6 +690,8 @@ class CCModelsApp(App):
             )
         self._rebuild_table()
         table.focus()
+        if self._fetch_on_start and not self.ctx.demo and self.ctx.catalog is None:
+            self.action_refresh()
         if self.ctx.imported_from_settings:
             self.notify("已从设置文件导入初始选择（本地状态此前为空）")
 
@@ -905,6 +911,8 @@ class CCModelsApp(App):
             self.notify("端点无效，请重新配置", severity="error")
             return
         api_key, _source = resolve_api_key(self.ctx, resolution)
+        self._fetch_state = FetchState.RUNNING
+        self._rebuild_table()
         self.notify(f"正在从 {resolution.raw} 刷新…")
         self._refresh_worker(resolution.raw, resolution.allow_insecure_http, api_key)
 
@@ -935,6 +943,8 @@ class CCModelsApp(App):
         if generation != self._refresh_generation or resolution.raw != endpoint:
             return
         if error is not None:
+            self._fetch_state = FetchState.FAILED
+            self._rebuild_table()
             self.notify(f"刷新失败: {error}", severity="error")
             self.notify("本地选择保持不变", severity="warning")
             return
@@ -943,8 +953,11 @@ class CCModelsApp(App):
         try:
             record_fetch(self.ctx.state_dir, catalog, self.ctx.selection)
         except CoreError as exc:
+            self._fetch_state = FetchState.FAILED
+            self._rebuild_table()
             self.notify(f"保存目录失败: {exc}", severity="error")
             return
+        self._fetch_state = FetchState.IDLE
         self.ctx.refresh_state()
         self.ctx.catalog = catalog
         self._rebuild_table()
@@ -1015,6 +1028,8 @@ class CCModelsApp(App):
         from .session import resolve_endpoint
 
         resolution = resolve_endpoint(self.ctx)
+        self._refresh_generation += 1
+        self._fetch_state = FetchState.IDLE
         self.ctx.catalog = self.ctx.catalog_for_current_endpoint(
             resolution.raw, resolution.allow_insecure_http
         )
@@ -1073,6 +1088,7 @@ class CCModelsApp(App):
             self.notify(f"保存配置失败: {exc}", severity="error")
             return
         self._refresh_generation += 1
+        self._fetch_state = FetchState.IDLE
         self.ctx.refresh_state()
         self.ctx.selection = self.ctx.state.selection
         self.ctx.catalog = self.ctx.catalog_for_current_endpoint(
@@ -1085,4 +1101,4 @@ class CCModelsApp(App):
 
 
 def run_app(ctx: SessionContext) -> None:
-    CCModelsApp(ctx).run()
+    CCModelsApp(ctx, fetch_on_start=True).run()

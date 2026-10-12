@@ -1,9 +1,9 @@
 import asyncio
 import json
 
-from textual.widgets import Checkbox, Input
+from textual.widgets import Checkbox, Input, Static
 
-from cc_models.app import CCModelsApp, ConfigModal
+from cc_models.app import CCModelsApp, ConfigModal, DriftModal, FetchState
 from cc_models.domain import Catalog
 from cc_models.session import load_session, resolve_api_key, resolve_endpoint
 from cc_models.store import load_state
@@ -114,6 +114,12 @@ def test_slow_refresh_cannot_rebind_after_config_change(tmp_path, monkeypatch):
                 await pilot.click("#config-save")
                 await pilot.pause()
                 assert ctx.state.config.endpoint == "https://b.example/v1"
+                # The stale in-flight refresh no longer owns the fetch state:
+                # the rebind must land on IDLE, not a stuck RUNNING hint.
+                assert app._fetch_state is FetchState.IDLE
+                assert app.query_one("#empty", Static).content == (
+                    "尚无目录缓存 · 按 r 拉取模型目录"
+                )
             finally:
                 release.set()
             await asyncio.wait_for(app.workers.wait_for_complete(), 5)
@@ -121,6 +127,65 @@ def test_slow_refresh_cannot_rebind_after_config_change(tmp_path, monkeypatch):
             assert ctx.catalog is None
             assert load_state(ctx.state_dir).cache is None
             assert all(row[0] != "stale-A" for row in app._row_metas)
+
+    asyncio.run(exercise())
+
+
+def test_drift_reload_resets_the_dropped_refresh_state(tmp_path, monkeypatch):
+    import threading
+
+    async def exercise():
+        target = tmp_path / "user.json"
+        target.write_text(
+            json.dumps(
+                {
+                    "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:2317"},
+                    "modelPicker": {"options": [{"model": "stale-model", "label": "Stale"}]},
+                }
+            )
+        )
+        ctx = load_session(target, tmp_path / "state")
+        monkeypatch.delenv("CPA_BASE_URL", raising=False)
+        started, release = threading.Event(), threading.Event()
+
+        def fetch(endpoint, **_kwargs):
+            started.set()
+            assert release.wait(5), "fetch release timed out"
+            return Catalog(endpoint=endpoint, fetched_at="2026-01-01", model_ids=["stale"])
+
+        monkeypatch.setattr("cc_models.app.fetch_catalog", fetch)
+        app = CCModelsApp(ctx, fetch_on_start=True)
+        async with app.run_test(size=(120, 50)) as pilot:
+            try:
+                assert await asyncio.to_thread(started.wait, 3)
+                assert app._fetch_state is FetchState.RUNNING
+                target.write_text(
+                    json.dumps(
+                        {
+                            "env": {"ANTHROPIC_BASE_URL": "https://b.example"},
+                            "modelPicker": {
+                                "options": [{"model": "stale-model", "label": "Stale"}]
+                            },
+                        }
+                    )
+                )
+                await pilot.press("a")
+                await pilot.pause()
+                await pilot.click("#apply-yes")
+                await pilot.pause()
+                assert isinstance(app.screen, DriftModal)
+                await pilot.click("#drift-reload")
+                await pilot.pause()
+            finally:
+                release.set()
+            await asyncio.wait_for(app.workers.wait_for_complete(), 5)
+            await pilot.pause()
+            assert app.ctx.catalog is None
+            assert app._row_metas == [("stale-model", True, False)]
+            await pilot.press("space")
+            await pilot.pause()
+            assert app._row_metas == []
+            assert app.query_one("#empty", Static).content == "尚无目录缓存 · 按 r 拉取模型目录"
 
     asyncio.run(exercise())
 
@@ -142,16 +207,21 @@ def test_offline_cached_startup_preserves_missing_selection(tmp_path, monkeypatc
             ctx.selection,
         )
 
-        def forbidden(*args, **kwargs):
+        calls: list[str] = []
+
+        def forbidden(endpoint: str, **_kwargs: object) -> object:
+            calls.append(endpoint)
             raise AssertionError("offline startup must not fetch")
 
         monkeypatch.setattr("cc_models.app.fetch_catalog", forbidden)
         restarted = load_session(target, ctx.state_dir)
-        app = CCModelsApp(restarted)
+        app = CCModelsApp(restarted, fetch_on_start=True)
         async with app.run_test() as pilot:
             await pilot.pause()
+            assert calls == []
             assert app._row_metas == [("absent", True, True), ("cached", False, False)]
             assert restarted.selection.ids == ["absent"]
+            assert app.query_one("#empty", Static).display is False
 
     asyncio.run(exercise())
 
