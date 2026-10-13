@@ -3,8 +3,8 @@ class CcModels < Formula
 
   desc "CPA 模型目录选择器：Textual TUI + CLI（modelPicker 配置管理）"
   homepage "https://github.com/toRolex/cc-models"
-  url "https://github.com/toRolex/cc-models/releases/download/v0.1.1/cc_models-0.1.1.tar.gz"
-  sha256 "779e2978134ba2602c905219ca5dbef2e8c649495b0b9a6898ea9d801eb9a34c"
+  url "https://github.com/toRolex/cc-models/releases/download/v0.1.2/cc_models-0.1.2.tar.gz"
+  sha256 "7c974a989671182adea26afc6c1dcec315ce636f84046188b74c653ebc5eb376"
 
   depends_on "python@3.13"
 

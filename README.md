@@ -30,7 +30,7 @@ brew install toRolex/tap/cc-models
 brew update && brew upgrade toRolex/tap/cc-models
 ```
 
-安装完成后可用 `cc-models --version` 确认版本（当前为 0.1.1）。
+安装完成后可用 `cc-models --version` 确认版本。
 
 ### 本地源码安装（Unix，无需发布 Release）
 
