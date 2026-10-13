@@ -158,11 +158,15 @@ def cmd_list(ctx: SessionContext, args: argparse.Namespace) -> int:
             markers = []
             if option.model == default_id:
                 markers.append("默认")
+            if option.model in ctx.selection.one_min_exclusions:
+                markers.append("不加 1m")
             if catalog is not None and not catalog.contains(option.model):
                 markers.append("缺失")
             suffix = f"  [{'、'.join(markers)}]" if markers else ""
             desc = f" — {option.description}" if option.description else ""
-            print(f"  {i}. {option.model} — {option.label}{desc}{suffix}")
+            emitted = ctx.selection.output_model_id(option.model)
+            emitted_part = f"（输出: {emitted}）" if emitted != option.model else ""
+            print(f"  {i}. {option.model}{emitted_part} — {option.label}{desc}{suffix}")
     else:
         print("已选: （空）")
     if catalog is not None:

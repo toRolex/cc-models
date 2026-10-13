@@ -22,7 +22,7 @@ async def export() -> None:
     ctx = build_demo_context()
     app = CCModelsApp(ctx)
     try:
-        async with app.run_test(size=(110, 14)) as pilot:
+        async with app.run_test(size=(120, 16)) as pilot:
             await pilot.pause()
             table = app.query_one("#table", ModelTable)
             # A–Z order: Haiku, Opus, Sonnet, custom model.
@@ -41,17 +41,25 @@ async def export() -> None:
             await pilot.pause()
             assert "claude-sonnet-4-6" in ctx.selection.ids
             assert ctx.selection.default_edit.value == "claude-opus-4-6"
+            await pilot.press("m")
+            await pilot.pause()
+            assert ctx.selection.one_min_exclusions == frozenset({"claude-sonnet-4-6"})
+            assert ctx.selection.output_model_id("claude-opus-4-6") == "claude-opus-4-6[1m]"
+            assert ctx.selection.output_model_id("claude-sonnet-4-6") == "claude-sonnet-4-6"
             # Let startup/action notifications expire before exporting.
             await pilot.pause(4)
             svg = app.export_screenshot(title="cc-models · Model selection (demo)")
             assert "Coding" in svg and "claude-sonnet-4-6" in svg
+            assert "不加&#160;1m" in svg and "☑" in svg
             (ASSETS / "screenshot-model-list.svg").write_text(svg, encoding="utf-8")
-            await pilot.resize_terminal(110, 46)
+            await pilot.resize_terminal(120, 66)
             await pilot.press("p")
             await pilot.pause()
             assert isinstance(app.screen, PreviewModal)
             svg = app.export_screenshot(title="cc-models · Apply preview (demo)")
             assert "应用预览" in svg and "Coding" in svg
+            assert "claude-opus-4-6[1m]" in svg
+            assert "不会扩展后端实际能力" in svg
             (ASSETS / "screenshot-preview.svg").write_text(svg, encoding="utf-8")
             print("Exported demo model list and apply preview SVGs (no apply performed).")
     finally:

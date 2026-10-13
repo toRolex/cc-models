@@ -8,7 +8,11 @@
 
 ### 模型选择
 
-勾选模型、编辑显示名称和描述，并显式设置默认模型；请求仍使用原始模型 ID。
+勾选模型、编辑显示名称和描述，并显式设置默认模型。本地选择和目录匹配始终使用原始模型 ID，写入 Claude Code 的模型 ID 默认追加 `[1m]`。按 `m` 可对单个已选模型勾选「不加 1m」，保持原始 ID 输出。
+
+旧状态没有排除记录时默认全部添加。刷新新增模型不会自动选入菜单，选入后遵循同一默认。已有的 `[1m]` 后缀原样保留，不重复添加，勾选排除也不会删除原始 ID 中的后缀。显式设置的默认模型使用同一输出规则。未显式设置时保留原默认值不变。
+
+`[1m]` 只是 Claude Code 的客户端窗口声明，不会扩展后端实际能力，CPA/上游也可能不接受该后缀；预览会提醒这一点。
 
 <p align="center">
   <img src="docs/assets/screenshot-model-list.png" alt="演示模式：模型勾选、自定义名称与默认模型" width="960" />
@@ -63,7 +67,7 @@ uv tool install .
    ```
 
 2. 在界面按 `c` 设置上游地址和令牌环境变量名称，然后按 `r` 拉取模型目录。
-3. 勾选模型，按 `a` 确认应用，写入 `~/.claude/settings.json` 的 `modelPicker`。
+3. 勾选模型；默认输出会带 `[1m]` 后缀，如某个模型不加，选中后按 `m` 勾选「不加 1m」。按 `a` 确认应用，写入 `~/.claude/settings.json` 的 `modelPicker`。
 4. 按 `q` 退出，重启 Claude Code 看到新菜单。
 
 配置文件必须已存在且是严格 JSON 对象（不支持 JSONC 注释）。首次启动仅在本地状态文件不存在时导入已有 `modelPicker`，本地状态默认保存在 `~/.cc-models`。
@@ -81,7 +85,7 @@ uv tool install .
 ## 命令行
 
 ```sh
-cc-models list                  # 列出本地缓存的模型
+cc-models list                  # 列出本地缓存的模型与已选项的输出 ID
 cc-models refresh               # 拉取模型目录
 cc-models apply --dry-run       # 预览受管字段变更
 cc-models apply --yes           # 写入 modelPicker
@@ -106,6 +110,7 @@ cc-models --settings /path/to/user-config.json --state-dir /path/to/local-state 
 | `/` | 聚焦搜索框，Esc 返回列表 |
 | 空格 | 勾选或取消，焦点跟随原模型 ID |
 | `e` | 编辑显示名称和描述（留空清除描述，模型 ID 不变） |
+| `m` | 对已选条目勾选或取消「不加 1m」（未选中的行不可用） |
 | `d` | 设置默认模型，再按一次恢复原默认 |
 | `Ctrl+↑/↓` | 调整精选顺序（应用顺序，不影响表格显示排序） |
 | `s` | 切换表格按模型 ID 排序的方向（A–Z / Z–A），偏好持久保存 |
@@ -137,9 +142,9 @@ cc-models --settings /path/to/user-config.json --state-dir /path/to/local-state 
 
 ### Claude Code 提示模型不在其 model catalog 中，需要处理吗？
 
-这是 Claude Code 对未知模型 ID 的提示，不等于 CPA 目录刷新失败，也不表示请求失败。cc-models 从 CPA 拉取的目录和 Claude Code 内置的模型信息不是同一个目录。
+这是 Claude Code 对未知模型 ID 的提示，不等于 CPA 目录刷新失败，也不表示请求失败。cc-models 从 CPA 拉取的目录和 Claude Code 内置的模型信息不是同一个目录。本工具默认为输出 ID 追加 `[1m]`，可在界面用 `m` 逐模型改为不加；如果 CPA 上游不接受该后缀，请求会失败，这时应改为不加 `[1m]`。
 
-未知 ID 默认按 **200k 上下文窗口**进行自动压缩。如果请求正常、这个保守限制符合需求，可以先保持默认。若已确认后端的真实窗口不同，可用 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 声明真实值；不要猜窗口大小，也不要仅为消除提示就添加 `[1m]`。
+`[1m]` 后缀只是客户端窗口声明，不会扩展后端的真实窗口。若已确认后端的真实窗口与声明不同，可用 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 声明真实值；不要猜窗口大小。
 
 `behavesAs` / `modelOverrides` 会改变 Claude Code 对模型行为的假设，不应仅为隐藏提示而把非 Claude 模型随意映射成 Claude。cc-models 会保留导入的 `behavesAs`，但不自动生成它。
 

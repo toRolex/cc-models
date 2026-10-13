@@ -12,8 +12,8 @@
 
 ## 真实界面截图
 
-- `screenshot-model-list.png` / `.svg`：勾选、显示名称和描述编辑、显式默认模型；终端尺寸 110×14。
-- `screenshot-preview.png` / `.svg`：按 `p` 打开的真实应用预览；终端尺寸 110×46。预览内容可滚动，截图不表示整个 JSON 差异已全部显示。
+- `screenshot-model-list.png` / `.svg`：勾选、显示名称和描述编辑、显式默认模型，以及通过 `m` 勾选「不加 1m」的排除列；终端尺寸 120×16。
+- `screenshot-preview.png` / `.svg`：按 `p` 打开的真实应用预览；终端尺寸 120×66。
 
 截图使用 `build_demo_context()` 的临时配置与固定模型，不访问网络、不修改真实 Claude Code 配置，也不执行应用。由 Textual Pilot 操作真实 TUI，`app.export_screenshot()` 导出 SVG，再由系统 `rsvg-convert` 转成 PNG。不是生图模型生成的界面，也不是系统窗口截图。
 
@@ -25,4 +25,4 @@ rsvg-convert -w 1600 docs/assets/screenshot-model-list.svg -o docs/assets/screen
 rsvg-convert -w 1600 docs/assets/screenshot-preview.svg -o docs/assets/screenshot-preview.png
 ```
 
-导出脚本会断言模型选择、默认值、重命名和预览弹窗状态，并在结束后清理临时演示目录。PNG 是 SVG 的派生展示版本，SVG 保留真实界面的导出记录。
+导出脚本会断言模型选择、默认值、重命名、「不加 1m」排除状态和预览弹窗中的输出 ID 与警告，并在结束后清理临时演示目录。PNG 是 SVG 的派生展示版本，SVG 保留真实界面的导出记录。

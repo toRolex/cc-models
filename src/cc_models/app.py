@@ -1,6 +1,6 @@
 """Textual TUI for cc-models (Chinese primary UI; raw model IDs untouched).
 
-Keys: j/k 移动焦点 · space 选择 · e 编辑标签和描述 · ctrl+↑/↓ 排序 · d 设默认 · / 过滤 · r 刷新 ·
+Keys: j/k 移动焦点 · space 选择 · m 不加 1m · e 编辑标签和描述 · ctrl+↑/↓ 排序 · d 设默认 · / 过滤 · r 刷新 ·
 p 预览 · a 确认应用 · c 端点配置 · Ctrl+P 命令/主题面板 · q 退出。
 
 - Snapshot is taken at session start (in :mod:`session`); apply re-checks and
@@ -53,7 +53,7 @@ from .store import EndpointConfig, load_state, record_fetch, save_selection, sav
 if TYPE_CHECKING:
     from .session import SessionContext
 
-COLUMNS = ("选", "默认", "状态", "模型 ID", "标签", "描述")
+COLUMNS = ("选", "默认", "不加 1m", "状态", "模型 ID", "标签", "描述")
 INSECURE_WARNING = (
     "警告：远程明文 HTTP 不受加密保护，令牌将以明文传输，可能被中间人截获。\n"
     "仅在可信内网环境且明确知悉风险时开启。"
@@ -195,6 +195,7 @@ class ModelTable(DataTable):
         Binding("ctrl+down", "app.move_down", "下移", key_display="ctrl+↓"),
         Binding("s", "app.toggle_sort", "排序 A–Z/Z–A"),
         Binding("d", "app.default", "设默认"),
+        Binding("m", "app.toggle_one_min", "不加 1m"),
     ]
 
     # Instance-level renderer: only scrollbars owned by this app's widgets get
@@ -426,6 +427,11 @@ class DriftModal(ModalScreen[str]):
 
 
 RowMeta = tuple[str, bool, bool]  # (model_id, selected, missing)
+
+# The core's [1m] window-declaration warning, translated for the Chinese UI
+# without touching the shared settings boundary (core stays English).
+_ONE_MIN_WARNING_EN = "[1m] output suffix"
+ONE_MIN_WARNING_ZH = "[1m] 后缀仅是客户端窗口声明，不会扩展后端实际能力；CPA/上游可能不接受该后缀。"
 
 
 class EmptyReason(StrEnum):
@@ -757,7 +763,25 @@ class CCModelsApp(App):
             else:
                 default_mark = ""
             status = Text("缺失", style="#f38ba8") if missing else ""
-            table.add_row(chosen, default_mark, status, model_id, label, description)
+            # '□/☑' as literal glyphs: no Rich markup, and raw IDs render via
+            # Text so a literal '[1m]' suffix in a model ID is never markup.
+            if is_selected:
+                one_min_mark = (
+                    Text("☑", style="#f9e2af bold")
+                    if model_id in self.ctx.selection.one_min_exclusions
+                    else Text("□", style="#a6adc8")
+                )
+            else:
+                one_min_mark = ""
+            table.add_row(
+                chosen,
+                default_mark,
+                one_min_mark,
+                status,
+                Text(model_id),
+                label,
+                description,
+            )
 
         if visible:
             if focused_id is not None and focused_id in visible_indices:
@@ -783,8 +807,10 @@ class CCModelsApp(App):
             if self.ctx.selection.replace_built_in is not None
             else "跟随文件"
         )
+        excluded_count = len(self.ctx.selection.one_min_exclusions)
+        exclusion_part = f" · 不加 1m {excluded_count}" if excluded_count else ""
         status.update(
-            f"已选 {len(self.ctx.selection.options)} · 目录 "
+            f"已选 {len(self.ctx.selection.options)}{exclusion_part} · 目录 "
             f"{len(self.ctx.catalog.model_ids) if self.ctx.catalog else 0} · "
             f"排序 {'Z–A' if self.ctx.state.sort is SortOrder.ZA else 'A–Z'} · "
             f"replaceBuiltInOptions: {replace_state} · {resolution_hint}"
@@ -830,6 +856,11 @@ class CCModelsApp(App):
             self.ctx.selection.options = [
                 o for o in self.ctx.selection.options if o.model != model_id
             ]
+            # Deselecting cleans the exclusion: exclusions only cover selected IDs.
+            if model_id in self.ctx.selection.one_min_exclusions:
+                self.ctx.selection.one_min_exclusions = self.ctx.selection.one_min_exclusions - {
+                    model_id
+                }
             if (
                 self.ctx.selection.default_edit.kind == "set"
                 and self.ctx.selection.default_edit.value == model_id
@@ -926,7 +957,24 @@ class CCModelsApp(App):
         self._save_selection()
         self._rebuild_table()
 
-    # refresh -----------------------------------------------------------
+    def action_toggle_one_min(self) -> None:
+        """m toggles the focused selected row's '不加 1m' exclusion policy."""
+        focused = self._focused_meta()
+        if focused is None or not focused[1]:
+            self.notify("『不加 1m』仅对已选条目开放；先按空格选择", severity="warning")
+            return
+        model_id = focused[0]
+        exclusions = self.ctx.selection.one_min_exclusions
+        if model_id in exclusions:
+            self.ctx.selection.one_min_exclusions = exclusions - {model_id}
+            self.notify(
+                f"{model_id} 恢复默认: 应用时输出 {self.ctx.selection.output_model_id(model_id)}"
+            )
+        else:
+            self.ctx.selection.one_min_exclusions = exclusions | {model_id}
+            self.notify(f"{model_id} 将不加 1m（保持原始 ID 输出）")
+        self._save_selection()
+        self._rebuild_table()
 
     def action_refresh(self) -> None:
         self._refresh_generation += 1
@@ -1006,7 +1054,10 @@ class CCModelsApp(App):
 
         text = _json.dumps(preview.managed_changes, ensure_ascii=False, indent=2)
         if preview.warnings:
-            text += "\n\n警告:\n" + "\n".join(f"- {w}" for w in preview.warnings)
+            text += "\n\n警告:\n" + "\n".join(
+                f"- {ONE_MIN_WARNING_ZH if _ONE_MIN_WARNING_EN in w else w}"
+                for w in preview.warnings
+            )
         if not preview.would_write:
             text = "（无变更 no-op）\n" + text
         return text, preview
