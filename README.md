@@ -6,13 +6,22 @@
 
 在终端里选择 CPA 模型，生成 Claude Code 的模型菜单。模型请求使用原始 ID，显示名称独立编辑。
 
+### 模型选择
+
+勾选模型、编辑显示名称和描述，并显式设置默认模型；请求仍使用原始模型 ID。
+
 <p align="center">
-  <img src="docs/assets/screenshot-model-list.png" alt="模型列表主界面（演示模式）" width="720" />
-  <br />
-  <img src="docs/assets/screenshot-preview.png" alt="应用预览弹窗（演示模式）" width="720" />
-  <br />
-  <sub>以上为演示模式，通过 Textual Pilot 操作并导出终端画面，不是系统窗口截图。</sub>
+  <img src="docs/assets/screenshot-model-list.png" alt="演示模式：模型勾选、自定义名称与默认模型" width="960" />
 </p>
+
+<details>
+  <summary>查看应用预览：写入前检查受管字段的变化</summary>
+  <p align="center">
+    <img src="docs/assets/screenshot-preview.png" alt="演示模式：modelPicker 应用前后差异预览（可滚动）" width="960" />
+  </p>
+</details>
+
+以上图片由真实演示 TUI 导出，不是生图模拟界面，也不包含真实凭据。[图片来源与复现方式](docs/assets/README.md)。
 
 它是一个配置管理工具，不是代理：不转发请求，不修改 CPA 上游，也不是 CC Switch 的替代品。CC Switch 管理多个工具的整套 provider 配置；cc-models 管理 Claude Code 的 `modelPicker`，也可显式设置默认 `model`。
 
@@ -115,6 +124,28 @@ cc-models --settings /path/to/user-config.json --state-dir /path/to/local-state 
 - 本工具只请求模型目录，不发送聊天或能力测试请求；模型是否可用由 CPA 上游决定。
 - 仅在 Unix 环境验证过。
 - 上游新增模型不会自动选中；刷新失败不清空选择；空精选列表禁止应用。
+
+## 常见问题
+
+### 上游删了模型，为什么这里还在？
+
+模型目录与已选菜单分开管理。已有缓存时不会在启动时自动刷新，也没有后台定时同步；无缓存时启动界面会尝试拉取一次。
+
+在界面按 `r` 手动刷新，已选但不在最新目录中的模型会标为「缺失」，不会自动删除。按空格取消这些模型的勾选，再按 `a` 确认应用，最后重启 Claude Code。
+
+`cc-models refresh` 只更新目录缓存；`apply --yes` 不会自动清理缺失模型。
+
+### Claude Code 提示模型不在其 model catalog 中，需要处理吗？
+
+这是 Claude Code 对未知模型 ID 的提示，不等于 CPA 目录刷新失败，也不表示请求失败。cc-models 从 CPA 拉取的目录和 Claude Code 内置的模型信息不是同一个目录。
+
+未知 ID 默认按 **200k 上下文窗口**进行自动压缩。如果请求正常、这个保守限制符合需求，可以先保持默认。若已确认后端的真实窗口不同，可用 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 声明真实值；不要猜窗口大小，也不要仅为消除提示就添加 `[1m]`。
+
+`behavesAs` / `modelOverrides` 会改变 Claude Code 对模型行为的假设，不应仅为隐藏提示而把非 Claude 模型随意映射成 Claude。cc-models 会保留导入的 `behavesAs`，但不自动生成它。
+
+不建议默认设置 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`：这会关闭未知模型的主动窗口保护，改为等待 API 的上下文超限错误；网关若改写错误，恢复可能失败。
+
+详见 [Claude Code 官方上下文窗口说明](https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id)。
 
 ## 开发
 
