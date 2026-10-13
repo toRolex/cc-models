@@ -28,6 +28,7 @@ from .domain import (
     Catalog,
     EndpointError,
     Selection,
+    SortOrder,
     StateError,
     normalize_endpoint,
     parse_strict_json,
@@ -116,6 +117,7 @@ class LocalState:
     selection: Selection = field(default_factory=Selection)
     cache: CachedCatalog | None = None
     config: EndpointConfig = field(default_factory=EndpointConfig)
+    sort: SortOrder = SortOrder.AZ
     warnings: list[str] = field(default_factory=list)
 
 
@@ -173,11 +175,22 @@ def load_state(state_dir: str | os.PathLike[str]) -> LocalState:
         raise StateError("local state root must be a JSON object")
     if data.get("version") != STATE_VERSION:
         raise StateError(f"unsupported local state version: {data.get('version')!r}")
-    if not set(data) <= {"version", "selection", "cache", "config"}:
+    if not set(data) <= {"version", "selection", "cache", "config", "sort"}:
         raise StateError(
             "unexpected keys in local state: "
-            f"{sorted(set(data) - {'version', 'selection', 'cache', 'config'})}"
+            f"{sorted(set(data) - {'version', 'selection', 'cache', 'config', 'sort'})}"
         )
+    if "sort" in data:
+        sort_value = data["sort"]
+        try:
+            sort = SortOrder(sort_value)
+        except ValueError:
+            raise StateError(
+                f"invalid sort order in local state: {sort_value!r} "
+                f"(expected one of {[o.value for o in SortOrder]})"
+            ) from None
+    else:
+        sort = SortOrder.AZ
 
     selection_obj = data.get("selection")
     if selection_obj is None:
@@ -202,7 +215,7 @@ def load_state(state_dir: str | os.PathLike[str]) -> LocalState:
     except (ValueError, EndpointError) as exc:
         raise StateError(f"invalid endpoint config in local state: {exc}") from exc
 
-    return LocalState(selection=selection, cache=cache, config=config, warnings=warnings)
+    return LocalState(selection=selection, cache=cache, config=config, sort=sort, warnings=warnings)
 
 
 def save_state(state_dir: str | os.PathLike[str], state: LocalState) -> Path:
@@ -225,6 +238,8 @@ def save_state(state_dir: str | os.PathLike[str], state: LocalState) -> Path:
         }
     if state.config != EndpointConfig():
         payload["config"] = state.config.to_json()
+    if state.sort != SortOrder.AZ:
+        payload["sort"] = state.sort.value
     content = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     path = state_path(directory)
     fd, temp_name = tempfile.mkstemp(dir=str(directory), prefix=".cc-models-state-", suffix=".tmp")

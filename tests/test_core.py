@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from cc_models import settings as settings_mod
+from cc_models.app import FetchState, project_table
 from cc_models.catalog import fetch_catalog
 from cc_models.domain import (
     BackupError,
@@ -31,6 +32,7 @@ from cc_models.domain import (
     RestoreRefusedError,
     Selection,
     SelectionError,
+    SortOrder,
     StateError,
     normalize_endpoint,
 )
@@ -51,6 +53,7 @@ from cc_models.store import (
     record_fetch,
     save_config,
     save_selection,
+    save_state,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -1048,3 +1051,123 @@ def test_empty_selection_persists_but_apply_blocks(tmp_path):
     path = write_settings(tmp_path, BASE_SETTINGS)
     with pytest.raises(SelectionError):
         apply_selection(read_snapshot(path), state.selection, tmp_path)
+
+
+# ---------------------------------------------------------------- sort order
+
+
+def test_local_state_sort_defaults_and_conditionally_persists(tmp_path):
+    """Missing/legacy state defaults to A–Z; only Z–A writes the sort key."""
+    assert load_state(tmp_path).sort == SortOrder.AZ
+
+    state = load_state(tmp_path)
+    state.sort = SortOrder.ZA
+    state.selection = Selection(options=[PickerOption("m", "M")])
+    save_state(tmp_path, state)
+    text = (tmp_path / "state.json").read_text()
+    assert '"sort": "z-a"' in text
+    reloaded = load_state(tmp_path)
+    assert reloaded.sort == SortOrder.ZA
+    assert reloaded.selection.ids == ["m"]
+
+    # A–Z default is omitted from the file.
+    state.sort = SortOrder.AZ
+    save_state(tmp_path, state)
+    text = (tmp_path / "state.json").read_text()
+    assert "sort" not in text
+    assert load_state(tmp_path).sort == SortOrder.AZ
+
+
+def test_local_state_legacy_file_without_sort_loads_az(tmp_path):
+    (tmp_path / "state.json").write_text(json.dumps({"version": 1}))
+    state = load_state(tmp_path)
+    assert state.sort == SortOrder.AZ
+    assert state.selection.options == []
+
+
+@pytest.mark.parametrize("bad", [None, "AZ", "desc", 1, {"a": 1}])
+def test_local_state_rejects_invalid_sort_values(tmp_path, bad):
+    (tmp_path / "state.json").write_text(json.dumps({"version": 1, "sort": bad}))
+    with pytest.raises(StateError, match="sort"):
+        load_state(tmp_path)
+
+
+def test_sort_preference_survives_selection_fetch_and_config_saves(tmp_path):
+    state = load_state(tmp_path)
+    state.sort = SortOrder.ZA
+    save_state(tmp_path, state)
+
+    selection = Selection(options=[PickerOption("m", "M")])
+    save_selection(tmp_path, selection)
+    assert load_state(tmp_path).sort == SortOrder.ZA
+    catalog = Catalog(endpoint="http://localhost:2317/v1", fetched_at="now", model_ids=["z", "m"])
+    record_fetch(tmp_path, catalog, selection)
+    saved = load_state(tmp_path)
+    assert saved.sort == SortOrder.ZA
+    assert saved.cache is not None and saved.cache.model_ids == ["z", "m"]
+    config = EndpointConfig(endpoint="http://localhost:2318/v1")
+    save_config(tmp_path, config)
+    saved = load_state(tmp_path)
+    assert saved.sort == SortOrder.ZA
+    assert saved.config == config
+    assert saved.selection.ids == ["m"]
+    assert saved.cache is not None and saved.cache.model_ids == ["z", "m"]
+
+
+def test_project_table_sorts_all_rows_globally_casefold():
+    """Selected, unselected and missing rows share one casefold order; raw IDs
+    and Selection.options are untouched; ties keep pre-sort relative order."""
+    selection = Selection(
+        options=[
+            PickerOption("Zulu", "Z"),
+            PickerOption("MIXED-case", "M"),
+        ]
+    )
+    # Catalog order deliberately unsorted; "mixed-CASE" ties with the selected
+    # "MIXED-case" but is a distinct raw ID.
+    catalog = Catalog(
+        endpoint="http://x",
+        fetched_at="2026-01-01T00:00:00+00:00",
+        model_ids=["MIXED-CASE", "alpha", "zulu-2", "Zulu", "Beta"],
+    )
+
+    az = project_table(selection, catalog, "", FetchState.IDLE, sort=SortOrder.AZ)
+    assert [row[0] for row in az.rows] == [
+        "alpha",
+        "Beta",
+        "MIXED-case",
+        "MIXED-CASE",
+        "Zulu",
+        "zulu-2",
+    ]
+    assert [row[1] for row in az.rows] == [False, False, True, False, True, False]
+    # Missing flag follows the raw selected ID only (MIXED-case is absent
+    # from the catalog; the casefold-tied MIXED-CASE is a distinct model).
+    assert [row[2] for row in az.rows] == [False, False, True, False, False, False]
+
+    za = project_table(selection, catalog, "", FetchState.IDLE, sort=SortOrder.ZA)
+    assert [row[0] for row in za.rows] == [
+        "zulu-2",
+        "Zulu",
+        "MIXED-case",
+        "MIXED-CASE",
+        "Beta",
+        "alpha",
+    ]
+    # Default parameter is A–Z.
+    default = project_table(selection, catalog, "", FetchState.IDLE)
+    assert [row[0] for row in default.rows] == [row[0] for row in az.rows]
+
+    # Display sorting never reorders the application order or mutates raw IDs.
+    assert selection.ids == ["Zulu", "MIXED-case"]
+
+
+def test_project_table_sort_applies_after_filtering():
+    selection = Selection(options=[PickerOption("Beta", "B")])
+    catalog = Catalog(
+        endpoint="http://x",
+        fetched_at="2026-01-01T00:00:00+00:00",
+        model_ids=["alpha", "Beta", "gamma"],
+    )
+    view = project_table(selection, catalog, "a", FetchState.IDLE, sort=SortOrder.ZA)
+    assert [row[0] for row in view.rows] == ["gamma", "Beta", "alpha"]

@@ -44,6 +44,7 @@ from .domain import (
     EndpointError,
     PickerOption,
     Selection,
+    SortOrder,
     normalize_endpoint,
 )
 from .settings import preview_apply
@@ -192,6 +193,7 @@ class ModelTable(DataTable):
         Binding("e", "app.rename", "重命名"),
         Binding("ctrl+up", "app.move_up", "上移", key_display="ctrl+↑"),
         Binding("ctrl+down", "app.move_down", "下移", key_display="ctrl+↓"),
+        Binding("s", "app.toggle_sort", "排序 A–Z/Z–A"),
         Binding("d", "app.default", "设默认"),
     ]
 
@@ -474,12 +476,13 @@ def project_table(
     catalog: Catalog | None,
     filter_text: str,
     fetch_state: FetchState,
+    *,
+    sort: SortOrder = SortOrder.AZ,
 ) -> TableView:
-    """Derive the visible rows and, when there are none, why the table is empty.
+    """Project globally casefold-sorted rows without changing selection order.
 
-    The reason is the first match in this order: rows visible, a filter hid
-    real rows, a refresh running, the last refresh failed, no catalog, an
-    empty catalog.
+    Empty-state precedence is filtered, refreshing, failed, no catalog, empty
+    catalog. Equal sort keys retain their input order in both directions.
     """
     selected = {opt.model: opt for opt in selection.options}
     ordered: list[RowMeta] = []
@@ -490,6 +493,10 @@ def project_table(
         for model_id in catalog.model_ids:
             if model_id not in selected:
                 ordered.append((model_id, False, False))
+    ordered.sort(
+        key=lambda row: row[0].casefold(),
+        reverse=sort is SortOrder.ZA,
+    )
 
     needle = filter_text.casefold()
     visible = [
@@ -716,7 +723,11 @@ class CCModelsApp(App):
         old_cursor_row = table.cursor_row
         selected = {opt.model: opt for opt in self.ctx.selection.options}
         view = project_table(
-            self.ctx.selection, self.ctx.catalog, self._filter_text, self._fetch_state
+            self.ctx.selection,
+            self.ctx.catalog,
+            self._filter_text,
+            self._fetch_state,
+            sort=self.ctx.state.sort,
         )
         visible = view.rows
         self._row_metas = visible
@@ -757,6 +768,8 @@ class CCModelsApp(App):
 
         self._update_empty(view.reason)
 
+        direction = "Z–A" if self.ctx.state.sort is SortOrder.ZA else "A–Z"
+        self.query_one("#title", Static).update(f"cc-models — CPA 模型选择器 · 名称 {direction}")
         status = self.query_one("#status", Static)
         resolution_hint = (
             "演示模式（无网络）"
@@ -773,14 +786,17 @@ class CCModelsApp(App):
         status.update(
             f"已选 {len(self.ctx.selection.options)} · 目录 "
             f"{len(self.ctx.catalog.model_ids) if self.ctx.catalog else 0} · "
+            f"排序 {'Z–A' if self.ctx.state.sort is SortOrder.ZA else 'A–Z'} · "
             f"replaceBuiltInOptions: {replace_state} · {resolution_hint}"
         )
 
-    def _save_selection(self) -> None:
+    def _save_selection(self) -> bool:
         try:
             save_selection(self.ctx.state_dir, self.ctx.selection)
-        except CoreError as exc:
+        except (CoreError, OSError) as exc:
             self.notify(f"保存选择失败: {exc}", severity="error")
+            return False
+        return True
 
     def _selected_option(self, model_id: str) -> PickerOption | None:
         for option in self.ctx.selection.options:
@@ -864,7 +880,11 @@ class CCModelsApp(App):
         if not 0 <= target < len(options):
             return
         options[index], options[target] = options[target], options[index]
-        self._save_selection()
+        if self._save_selection():
+            direction = "Z–A" if self.ctx.state.sort is SortOrder.ZA else "A–Z"
+            self.notify(
+                f"应用顺序已调整：第 {target + 1}/{len(options)} 项；表格仍按 {direction} 显示"
+            )
         self._rebuild_table()
 
     def action_move_up(self) -> None:
@@ -872,6 +892,21 @@ class CCModelsApp(App):
 
     def action_move_down(self) -> None:
         self._move(1)
+
+    def action_toggle_sort(self) -> None:
+        """Persist the direction and imported selection before updating the view."""
+        target = SortOrder.ZA if self.ctx.state.sort is SortOrder.AZ else SortOrder.AZ
+        try:
+            candidate = load_state(self.ctx.state_dir)
+            candidate.sort = target
+            candidate.selection = self.ctx.selection
+            save_state(self.ctx.state_dir, candidate)
+        except (CoreError, OSError) as exc:
+            self.notify(f"切换排序失败: {exc}", severity="error")
+            return
+        self.ctx.state = candidate
+        self._rebuild_table()
+        self.notify(f"已切换为 {'Z–A' if target is SortOrder.ZA else 'A–Z'} 排序")
 
     def action_default(self) -> None:
         focused = self._focused_meta()

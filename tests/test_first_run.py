@@ -89,10 +89,12 @@ def test_project_table_reason_priority(
     assert view.rows == []
 
 
-def test_project_table_orders_selected_first_then_catalog() -> None:
+def test_project_table_orders_rows_globally_casefold_ignoring_selection() -> None:
+    """Rows sort by raw model_id casefold across the whole table; selection
+    status never groups rows (display order only, options order untouched)."""
     view = project_table(_selection(["sel"]), _catalog(["sel", "other"]), "", FetchState.IDLE)
     assert view.reason is None
-    assert view.rows == [("sel", True, False), ("other", False, False)]
+    assert view.rows == [("other", False, False), ("sel", True, False)]
 
 
 def test_project_table_flags_selected_ids_missing_from_catalog() -> None:

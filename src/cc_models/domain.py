@@ -23,6 +23,7 @@ from __future__ import annotations
 import ipaddress
 import json
 from dataclasses import dataclass, field
+from enum import StrEnum
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
@@ -38,6 +39,13 @@ DOCUMENTED_OPTION_KEYS = ("model", "label", "description", "behavesAs")
 # option fields are never persisted; they survive an apply via merge-by-raw-ID
 # from the settings snapshot (see settings.compute_new_state).
 PERSISTED_OPTION_EXTRA_KEYS = ("behavesAs",)
+
+
+class SortOrder(StrEnum):
+    """Display sort direction for the model table (raw model_id casefold key)."""
+
+    AZ = "az"
+    ZA = "z-a"
 
 
 class CoreError(Exception):

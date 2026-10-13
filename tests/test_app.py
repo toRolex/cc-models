@@ -16,7 +16,7 @@ import pytest
 from rich.console import Console
 from textual.app import InvalidThemeError
 from textual.renderables.blank import Blank
-from textual.widgets import Input
+from textual.widgets import Input, Static
 
 from cc_models.app import (
     MOCHA_ANSI_THEME,
@@ -137,71 +137,83 @@ def test_demo_toggle_default_and_rename(tmp_path) -> None:
         ctx = app.ctx
         await pilot.pause()
         # Demo settings import two options; catalog adds the other two rows.
+        # Display is globally casefold-sorted A–Z by raw model ID.
         assert rows(app) == [
-            ("claude-opus-4-6", True),
-            ("custom-proxy-model", True),
-            ("claude-sonnet-4-6", False),
             ("claude-haiku-4-5", False),
+            ("claude-opus-4-6", True),
+            ("claude-sonnet-4-6", False),
+            ("custom-proxy-model", True),
         ]
         table = app.query_one("#table", ModelTable)
         # Raw model IDs are shown untouched in the 模型 ID column.
-        assert table.get_row_at(0)[3] == "claude-opus-4-6"
-        assert table.get_row_at(3)[3] == "claude-haiku-4-5"
+        assert table.get_row_at(0)[3] == "claude-haiku-4-5"
+        assert table.get_row_at(3)[3] == "custom-proxy-model"
 
         assert isinstance(app.focused, ModelTable)
         await pilot.press("j")
         await pilot.pause()
-        assert app._focused_meta() == ("custom-proxy-model", True, False)
+        assert app._focused_meta() == ("claude-opus-4-6", True, False)
         await pilot.press("k")
         await pilot.pause()
-        assert app._focused_meta() == ("claude-opus-4-6", True, False)
+        assert app._focused_meta() == ("claude-haiku-4-5", False, False)
 
-        # space on row 0 (already selected) deselects it. Unselected catalog
-        # rows keep catalog order, so opus moves into the unselected block.
+        # space on row 0 selects it. Display order never depends on selection.
         await pilot.press("space")
         await pilot.pause()
         assert rows(app) == [
-            ("custom-proxy-model", True),
-            ("claude-opus-4-6", False),
-            ("claude-sonnet-4-6", False),
-            ("claude-haiku-4-5", False),
-        ]
-        assert [o.model for o in ctx.selection.options] == ["custom-proxy-model"]
-
-        assert app._focused_meta() == ("claude-opus-4-6", False, False)
-        # Focus follows the model ID even though the removed selected item moves rows.
-        await pilot.press("j", "j", "space")
-        await pilot.pause()
-        # Selection order first, then the remaining catalog rows.
-        assert rows(app) == [
-            ("custom-proxy-model", True),
             ("claude-haiku-4-5", True),
-            ("claude-opus-4-6", False),
+            ("claude-opus-4-6", True),
             ("claude-sonnet-4-6", False),
+            ("custom-proxy-model", True),
         ]
         assert [o.model for o in ctx.selection.options] == [
+            "claude-opus-4-6",
             "custom-proxy-model",
             "claude-haiku-4-5",
         ]
 
         assert app._focused_meta() == ("claude-haiku-4-5", True, False)
+        # Focus follows the model ID; rows keep their sorted positions.
+        await pilot.press("j", "j", "space")
+        await pilot.pause()
+        assert rows(app) == [
+            ("claude-haiku-4-5", True),
+            ("claude-opus-4-6", True),
+            ("claude-sonnet-4-6", True),
+            ("custom-proxy-model", True),
+        ]
+        assert [o.model for o in ctx.selection.options] == [
+            "claude-opus-4-6",
+            "custom-proxy-model",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-6",
+        ]
+
+        assert app._focused_meta() == ("claude-sonnet-4-6", True, False)
+        # ctrl+↑/↓ swaps neighbours in the application order (Selection.options),
+        # not the display rows; the sorted table shows the same positions.
         await pilot.press("ctrl+up")
         await pilot.pause()
-        assert app._focused_meta() == ("claude-haiku-4-5", True, False)
+        assert app._focused_meta() == ("claude-sonnet-4-6", True, False)
         assert [option.model for option in ctx.selection.options] == [
-            "claude-haiku-4-5",
+            "claude-opus-4-6",
             "custom-proxy-model",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
         ]
+        assert rows(app)[2] == ("claude-sonnet-4-6", True)
         await pilot.press("ctrl+down")
         await pilot.pause()
-        assert app._focused_meta() == ("claude-haiku-4-5", True, False)
+        assert app._focused_meta() == ("claude-sonnet-4-6", True, False)
         assert [option.model for option in ctx.selection.options] == [
+            "claude-opus-4-6",
             "custom-proxy-model",
             "claude-haiku-4-5",
+            "claude-sonnet-4-6",
         ]
         await pilot.press("d")
         await pilot.pause()
-        assert ctx.selection.default_edit == DefaultEdit("set", "claude-haiku-4-5")
+        assert ctx.selection.default_edit == DefaultEdit("set", "claude-sonnet-4-6")
 
         # e opens the rename modal for the focused selected row.
         await pilot.press("e")
@@ -219,24 +231,28 @@ def test_demo_toggle_default_and_rename(tmp_path) -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert not isinstance(app.screen, RenameModal)
-        haiku = next(o for o in ctx.selection.options if o.model == "claude-haiku-4-5")
+        haiku = next(o for o in ctx.selection.options if o.model == "claude-sonnet-4-6")
         assert haiku.label == "Opus Haiku"
         assert haiku.description == "New desc"
         # Raw IDs never change on rename.
         assert [o.model for o in ctx.selection.options] == [
+            "claude-opus-4-6",
             "custom-proxy-model",
             "claude-haiku-4-5",
+            "claude-sonnet-4-6",
         ]
 
         # Everything above persisted to the real local state file.
         state = load_state(ctx.state_dir)
         assert [o.model for o in state.selection.options] == [
+            "claude-opus-4-6",
             "custom-proxy-model",
             "claude-haiku-4-5",
+            "claude-sonnet-4-6",
         ]
         assert state.selection.options[-1].label == "Opus Haiku"
         assert state.selection.options[-1].description == "New desc"
-        assert state.selection.default_edit == DefaultEdit("set", "claude-haiku-4-5")
+        assert state.selection.default_edit == DefaultEdit("set", "claude-sonnet-4-6")
 
         # Reopen the editor and clear the description with an empty value.
         await pilot.press("e")
@@ -247,7 +263,7 @@ def test_demo_toggle_default_and_rename(tmp_path) -> None:
         await pilot.press("end", *(["backspace"] * len(description_input.value)))
         await pilot.press("enter")
         await pilot.pause()
-        haiku = next(o for o in ctx.selection.options if o.model == "claude-haiku-4-5")
+        haiku = next(o for o in ctx.selection.options if o.model == "claude-sonnet-4-6")
         assert haiku.label == "Opus Haiku"
         assert haiku.description is None
         assert load_state(ctx.state_dir).selection.options[-1].description is None
@@ -326,6 +342,8 @@ def test_demo_preview_cancel_then_apply_confirm_writes_settings(tmp_path) -> Non
         original = ctx.settings_path.read_text(encoding="utf-8")
 
         # Edit a selected option's description through the UI before applying.
+        # Display rows are casefold-sorted; focus row 1 (claude-opus-4-6) first.
+        await pilot.press("j")
         await pilot.press("e")
         await pilot.pause()
         assert isinstance(app.screen, RenameModal)
@@ -335,7 +353,8 @@ def test_demo_preview_cancel_then_apply_confirm_writes_settings(tmp_path) -> Non
         await pilot.pause()
         assert ctx.selection.options[0].description == "Isolated description"
 
-        # d sets default row 0 (claude-opus-4-6), so apply has real work.
+        # d sets the default to the focused row (claude-opus-4-6), so apply
+        # has real work.
         # This also creates the local state file; capture the file listing
         # afterwards so only the apply backup shows up as a new entry.
         await pilot.press("d")
@@ -574,7 +593,8 @@ def test_mocha_ansi_theme_renders_terminal_default_surfaces() -> None:
 
         table = app.query_one("#table", ModelTable)
         assert table.get_component_styles("datatable--cursor").background.ansi == -1
-        checked = table.get_row_at(0)[0]
+        # Display rows are casefold-sorted; row 1 is the first selected row (✓).
+        checked = table.get_row_at(1)[0]
         checked_style = checked.get_style_at_offset(Console(), 0)
         assert checked_style.color.get_truecolor().hex == "#a6e3a1"
         assert checked_style.bold is True
@@ -938,3 +958,202 @@ def test_other_app_scrollbar_keeps_reverse_thumb() -> None:
 
     bad = asyncio.run(_run())
     assert bad, "stock app should still use reverse-video thumbs"
+
+
+# ---------------------------------------------------------------- sort toggle
+
+
+def _visible_ids(app: CCModelsApp) -> list[str]:
+    return [mid for mid, _sel in rows(app)]
+
+
+def test_demo_toggle_sort_flips_persists_and_survives_restart() -> None:
+    """s flips the global display order, persists 'z-a', and a fresh app on the
+    same state dir restores the direction; selection order is never touched."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        assert _visible_ids(app) == [
+            "claude-haiku-4-5",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "custom-proxy-model",
+        ]
+        assert "A–Z" in str(app.query_one("#status", Static).render())
+        assert not state_path(ctx.state_dir).exists()
+
+        await pilot.press("s")
+        await pilot.pause()
+        assert _visible_ids(app) == [
+            "custom-proxy-model",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-haiku-4-5",
+        ]
+        assert "Z–A" in str(app.query_one("#status", Static).render())
+        # The imported selection is persisted together with the sort toggle.
+        saved = load_state(ctx.state_dir)
+        assert saved.sort.value == "z-a"
+        assert [o.model for o in saved.selection.options] == [
+            o.model for o in ctx.selection.options
+        ]
+        assert [o.model for o in ctx.selection.options] == [
+            "claude-opus-4-6",
+            "custom-proxy-model",
+        ]
+
+        # Focus keeps its raw model ID across the toggle.
+        await pilot.press("j", "j")
+        await pilot.pause()
+        focused = app._focused_meta()
+        assert focused is not None
+        focused = focused[0]
+        await pilot.press("s")
+        await pilot.pause()
+        assert _visible_ids(app) == [
+            "claude-haiku-4-5",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "custom-proxy-model",
+        ]
+        assert app._focused_meta() is not None
+        assert app._focused_meta()[0] == focused  # type: ignore[index]
+
+        # Restart semantics: a fresh app on the same state dir keeps the
+        # persisted direction (still A–Z after the second toggle).
+        reloaded_ctx = load_session(ctx.settings_path, ctx.state_dir)
+        restart = CCModelsApp(reloaded_ctx)
+
+        async def restart_scenario(restart_app: CCModelsApp, restart_pilot) -> None:
+            await restart_pilot.pause()
+            assert restart_app.ctx.state.sort.value == "az"
+            # A reloaded (non-demo) session has no catalog cache, so only the
+            # selected rows render — still in A–Z order.
+            assert _visible_ids(restart_app) == [
+                "claude-opus-4-6",
+                "custom-proxy-model",
+            ]
+
+        async def _restart_main() -> None:
+            async with restart.run_test(size=SIZE) as restart_pilot:
+                await restart_scenario(restart_app=restart, restart_pilot=restart_pilot)
+
+        await _restart_main()
+
+    run_pilot(scenario)
+
+
+def test_demo_toggle_sort_z_a_survives_restart_and_refresh() -> None:
+    """Restart, selection saves and refresh completion retain Z–A."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.press("s")
+        await pilot.pause()
+        assert _visible_ids(app)[0] == "custom-proxy-model"
+
+        reloaded_ctx = load_session(ctx.settings_path, ctx.state_dir)
+        assert reloaded_ctx.state.sort.value == "z-a"
+        restart = CCModelsApp(reloaded_ctx)
+        async with restart.run_test(size=SIZE) as restart_pilot:
+            await restart_pilot.pause()
+            assert _visible_ids(restart)[0] == "custom-proxy-model"
+            assert "Z–A" in str(restart.query_one("#status", Static).render())
+            from cc_models.domain import Catalog
+            from cc_models.session import resolve_endpoint
+            from cc_models.store import save_selection
+
+            save_selection(restart.ctx.state_dir, restart.ctx.selection)
+            assert load_state(restart.ctx.state_dir).sort.value == "z-a"
+            endpoint = resolve_endpoint(restart.ctx).raw
+            catalog = Catalog(endpoint=endpoint, fetched_at="now", model_ids=["Zulu", "alpha"])
+            restart._refresh_done(restart._refresh_generation, endpoint, catalog, None)
+            await restart_pilot.pause()
+            saved = load_state(restart.ctx.state_dir)
+            assert saved.sort.value == "z-a"
+            assert saved.cache is not None and saved.cache.model_ids == ["Zulu", "alpha"]
+            assert _visible_ids(restart) == [
+                "Zulu",
+                "custom-proxy-model",
+                "claude-opus-4-6",
+                "alpha",
+            ]
+            assert "Z–A" in str(restart.query_one("#status", Static).render())
+
+    run_pilot(scenario)
+
+
+def test_demo_toggle_sort_save_failure_keeps_direction(monkeypatch) -> None:
+    """A failed save keeps the active state, the table order and the status."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        before = _visible_ids(app)
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("cc_models.app.save_state", boom)
+        await pilot.press("s")
+        await pilot.pause()
+        assert ctx.state.sort.value == "az"
+        assert _visible_ids(app) == before
+        assert not state_path(ctx.state_dir).exists()
+        messages = [n.message for n in app._notifications]
+        assert any("切换排序失败" in m for m in messages)
+        assert not any("已切换为" in m for m in messages)
+
+    run_pilot(scenario)
+
+
+def test_demo_filter_input_s_is_literal_and_table_s_toggles() -> None:
+    """'s' in the filter input types a character; 's' on the table toggles."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        await pilot.pause()
+        await pilot.press("/")
+        assert isinstance(app.focused, Input) and app.focused.id == "filter"
+        await pilot.press("s")
+        await pilot.pause()
+        assert app.query_one("#filter", Input).value == "s"
+        # Filter 's' matches by raw ID/label: opus, sonnet and proxy.
+        assert _visible_ids(app) == [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "custom-proxy-model",
+        ]
+        assert app.ctx.state.sort.value == "az"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.focused, ModelTable)
+        await pilot.press("s")
+        await pilot.pause()
+        assert app.query_one("#filter", Input).value == "s"
+        assert app.ctx.state.sort.value == "z-a"
+        assert load_state(app.ctx.state_dir).sort.value == "z-a"
+
+    run_pilot(scenario)
+
+
+def test_demo_move_reports_application_order_not_display_order() -> None:
+    """ctrl+↑/↓ swap the application order; the feedback says so."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        await pilot.press("j", "j", "space")  # select claude-sonnet-4-6
+        await pilot.pause()
+        await pilot.press("ctrl+up")
+        await pilot.pause()
+        messages = [n.message for n in app._notifications]
+        assert any("应用顺序已调整" in m and "表格仍按" in m for m in messages)
+        assert [o.model for o in ctx.selection.options] == [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "custom-proxy-model",
+        ]
+
+    run_pilot(scenario)
