@@ -173,36 +173,81 @@ def build_model_picker(selection: Selection, picker: dict | None = None) -> dict
         out["replaceBuiltInOptions"] = (
             replace_built_in if isinstance(replace_built_in, bool) else True
         )
-    out["options"] = [option.to_settings() for option in selection.options]
+    out["options"] = [
+        {**option.to_settings(), "model": selection.output_model_id(option.model)}
+        for option in selection.options
+    ]
     return out
 
 
-def _merge_unknown_option_fields(new_picker: dict, original_picker: object) -> None:
-    """Preserve unknown imported option fields at apply time by original raw ID.
+def _merge_unknown_option_fields(
+    new_picker: dict, original_picker: object, selection: Selection
+) -> list[str]:
+    """Preserve unknown imported option fields at apply time.
 
-    Unknown option fields are never persisted in the selection; here they are
-    merged back from the original settings snapshot so an apply never silently
-    drops them. Documented fields always come from the selection, never the
-    original.
+    Unknown option fields are never persisted in the selection; they are
+    merged back from the original settings snapshot. Matching is by raw ID
+    (the selection order pairs raw options with built output options): exact
+    raw ID first, then the ``raw + '[1m]'`` form this tool may have written
+    on a previous apply (exact raw prefix, case-insensitive ``[1m]``
+    suffix), so re-apply and a later opt-out do not lose the fields. A raw
+    ID that already carries a ``[1m]`` suffix never uses the alias fallback
+    (this tool never writes a double suffix). Each source key is assigned to
+    at most one option; a source owned by another selected literal raw ID is
+    never reused. Ambiguous candidates raise SelectionError before write
+    instead of silently losing data. Returns warnings.
     """
+    warnings: list[str] = []
     if not isinstance(original_picker, dict):
-        return
+        return warnings
     original_options = original_picker.get("options")
     if not isinstance(original_options, list):
-        return
-    by_id: dict = {}
+        return warnings
+    by_id: dict[str, list] = {}
     for item in original_options:
         if isinstance(item, dict) and isinstance(item.get("model"), str):
-            by_id.setdefault(item["model"], item)
-    from .domain import DOCUMENTED_OPTION_KEYS
+            by_id.setdefault(item["model"], []).append(item)
+    from .domain import DOCUMENTED_OPTION_KEYS, SelectionError
 
-    for opt in new_picker["options"]:
-        source = by_id.get(opt.get("model"))
-        if source is None:
+    selected_raw = set(selection.ids)
+    used_sources: set[str] = set()
+    for raw_option, opt in zip(selection.options, new_picker["options"]):
+        raw_id = raw_option.model
+        candidates = by_id.get(raw_id, [])
+        source_key = raw_id
+        if not candidates and not raw_id.casefold().endswith("[1m]"):
+            alias_keys = [
+                k
+                for k in by_id
+                if k not in used_sources and k[-4:].casefold() == "[1m]" and k[:-4] == raw_id
+            ]
+            if len(alias_keys) > 1:
+                raise SelectionError(
+                    f"ambiguous unknown-field source candidates for {raw_id}: {alias_keys}"
+                )
+            if alias_keys and alias_keys[0] in selected_raw:
+                # That source belongs to the selected literal suffixed option.
+                warnings.append(
+                    f"unknown fields for {raw_id} skipped: source {alias_keys[0]} "
+                    "belongs to another selected option"
+                )
+                continue
+            if alias_keys:
+                source_key = alias_keys[0]
+                candidates = by_id[source_key]
+        if not candidates:
             continue
+        if len(candidates) > 1:
+            raise SelectionError(
+                f"ambiguous unknown-field source for {raw_id}: "
+                f"{len(candidates)} original options share the model ID"
+            )
+        used_sources.add(source_key)
+        source = candidates[0]
         for key, value in source.items():
             if key not in DOCUMENTED_OPTION_KEYS and key not in opt:
                 opt[key] = value
+    return warnings
 
 
 def compute_new_state(
@@ -218,22 +263,39 @@ def compute_new_state(
         raise SelectionError("refusing empty selection: apply would produce an empty picker")
     picker = existing_picker(snapshot)
     new_picker = build_model_picker(selection, picker)
-    _merge_unknown_option_fields(new_picker, picker)
+    merge_warnings = _merge_unknown_option_fields(new_picker, picker, selection)
     new_data = dict(snapshot.data)
     new_data[MANAGED_PICKER_KEY] = new_picker
     if selection.default_edit.kind == "set":
-        new_data[MANAGED_MODEL_KEY] = selection.default_edit.value
+        default_raw = selection.default_edit.value
+        if isinstance(default_raw, str):
+            new_data[MANAGED_MODEL_KEY] = selection.output_model_id(default_raw)
 
-    warnings: list[str] = []
+    warnings: list[str] = list(merge_warnings)
+    outputs = [opt["model"] for opt in new_picker["options"]]
+    if len(set(outputs)) != len(outputs):
+        raw_ids = sorted(selection.ids)
+        raise SelectionError(
+            "transformed output model ID collision between selected options "
+            f"{raw_ids}; exclude the un-suffixed raw ID via one_min_exclusions"
+        )
     selected_ids = selection.ids
     for model_id in selected_ids:
         if model_id.startswith("ccs-") and not any(w.endswith(model_id) for w in warnings):
             warnings.append(f"imported ccs- id in selection: {model_id}")
+    if any(opt["model"].casefold().endswith("[1m]") for opt in new_picker["options"]):
+        warnings.append(
+            "the [1m] output suffix is a client window declaration only: it does not "
+            "extend backend capability, and CPA/upstream compatibility is not assured"
+        )
     current_model = snapshot.data.get(MANAGED_MODEL_KEY)
+    # Membership is judged against emitted output IDs: a preserved default is
+    # compared with what the picker will actually contain after suffixing.
+    output_ids = {opt["model"] for opt in new_picker["options"]}
     if (
         selection.default_edit.kind == "preserve"
         and isinstance(current_model, str)
-        and current_model not in selected_ids
+        and current_model not in output_ids
     ):
         warnings.append(f"preserved default model not in selection: {current_model}")
 

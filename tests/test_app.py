@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 from textual.app import InvalidThemeError
 from textual.renderables.blank import Blank
 from textual.widgets import Input, Static
@@ -33,6 +34,7 @@ from cc_models.session import (
     DEMO_TOKEN,
     SessionContext,
     build_demo_context,
+    demo_catalog,
     load_session,
 )
 from cc_models.store import load_state, state_path
@@ -146,8 +148,8 @@ def test_demo_toggle_default_and_rename(tmp_path) -> None:
         ]
         table = app.query_one("#table", ModelTable)
         # Raw model IDs are shown untouched in the 模型 ID column.
-        assert table.get_row_at(0)[3] == "claude-haiku-4-5"
-        assert table.get_row_at(3)[3] == "custom-proxy-model"
+        assert table.get_row_at(0)[4].plain == "claude-haiku-4-5"
+        assert table.get_row_at(3)[4].plain == "custom-proxy-model"
 
         assert isinstance(app.focused, ModelTable)
         await pilot.press("j")
@@ -367,7 +369,7 @@ def test_demo_preview_cancel_then_apply_confirm_writes_settings(tmp_path) -> Non
         await pilot.pause()
         assert isinstance(app.screen, PreviewModal)
         preview_body = app.screen._text
-        assert '"after": "claude-opus-4-6"' in preview_body
+        assert '"after": "claude-opus-4-6[1m]"' in preview_body
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, (PreviewModal, ConfirmApplyModal))
@@ -384,15 +386,16 @@ def test_demo_preview_cancel_then_apply_confirm_writes_settings(tmp_path) -> Non
         data = json.loads(ctx.settings_path.read_text(encoding="utf-8"))
         picker = data["modelPicker"]
         # Raw IDs, not labels, land in the settings file.
+        # Emitted output IDs carry the default [1m] suffix; raw IDs stay local.
         assert [opt["model"] for opt in picker["options"]] == [
-            "claude-opus-4-6",
-            "custom-proxy-model",
+            "claude-opus-4-6[1m]",
+            "custom-proxy-model[1m]",
         ]
         assert picker["options"][0]["label"] == "Opus 演示"
         assert picker["options"][0]["description"] == "Isolated description"
         assert picker["replaceBuiltInOptions"] is True
         # Default edit lands in the managed top-level model key.
-        assert data["model"] == "claude-opus-4-6"
+        assert data["model"] == "claude-opus-4-6[1m]"
         # Unmanaged settings keys are preserved verbatim.
         assert data["theme"] == "dark"
         assert data["numParallelServers"] == 2
@@ -1155,5 +1158,182 @@ def test_demo_move_reports_application_order_not_display_order() -> None:
             "claude-sonnet-4-6",
             "custom-proxy-model",
         ]
+
+    run_pilot(scenario)
+
+
+# ------------------------------------------------- 1m exclusions (m binding)
+
+
+def _one_min_cells(app: CCModelsApp) -> list[str | Text]:
+    """The '不加 1m' column (index 2) for every visible row, in display order."""
+    table = app.query_one("#table", ModelTable)
+    return [table.get_row_at(i)[2] for i in range(len(app._row_metas))]
+
+
+def test_demo_m_binding_toggles_exclusion_and_survives_restart() -> None:
+    """m toggles the selected row's exclusion; unselected rows refuse it."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        # Row 0 is unselected haiku; row 1 is selected opus.
+        await pilot.press("m")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == frozenset()
+        assert load_state(ctx.state_dir).selection.one_min_exclusions == frozenset()
+
+        await pilot.press("j")
+        await pilot.pause()
+        assert app._focused_meta() == ("claude-opus-4-6", True, False)
+        await pilot.press("m")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == frozenset({"claude-opus-4-6"})
+        marks = _one_min_cells(app)
+        assert isinstance(marks[1], Text) and marks[1].plain == "☑"
+        assert isinstance(marks[0], str)  # unselected row has no mark
+        assert isinstance(marks[3], Text) and marks[3].plain == "□"
+        # Persisted through save_selection.
+        assert load_state(ctx.state_dir).selection.one_min_exclusions == frozenset(
+            {"claude-opus-4-6"}
+        )
+
+        # Toggle back off: default [1m] output policy resumes.
+        await pilot.press("m")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == frozenset()
+        mark = _one_min_cells(app)[1]
+        assert isinstance(mark, Text)
+        assert mark.plain == "□"
+
+        # Restart: exclusion persisted in the local state reloads via load_session.
+        await pilot.press("m")
+        await pilot.pause()
+        reloaded_ctx = load_session(ctx.settings_path, ctx.state_dir, demo=True)
+        reloaded_ctx.catalog = demo_catalog()
+
+        async def _restart_main() -> None:
+            restart = CCModelsApp(reloaded_ctx)
+            async with restart.run_test(size=SIZE) as restart_pilot:
+                await restart_pilot.pause()
+                assert restart_app_exclusions(restart) == frozenset({"claude-opus-4-6"})
+                marks = _one_min_cells(restart)
+                assert isinstance(marks[1], Text) and marks[1].plain == "☑"
+
+        await _restart_main()
+
+    run_pilot(scenario)
+
+
+def restart_app_exclusions(app: CCModelsApp) -> frozenset[str]:
+    return app.ctx.selection.one_min_exclusions
+
+
+def test_demo_deselect_cleans_exclusion_and_new_selection_gets_default() -> None:
+    """space deselect removes the exclusion; reselecting follows the default."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        await pilot.press("j")  # claude-opus-4-6 (selected)
+        await pilot.press("m")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == frozenset({"claude-opus-4-6"})
+
+        await pilot.press("space")
+        await pilot.pause()
+        # Deselect cleans the exclusion set.
+        assert ctx.selection.one_min_exclusions == frozenset()
+        assert app._focused_meta() == ("claude-opus-4-6", False, False)
+
+        # Reselect: newly selected models follow the default [1m] policy.
+        await pilot.press("space")
+        await pilot.pause()
+        assert ("claude-opus-4-6", True, False) == app._focused_meta()
+        assert ctx.selection.one_min_exclusions == frozenset()
+        assert ctx.selection.output_model_id("claude-opus-4-6") == "claude-opus-4-6[1m]"
+        assert load_state(ctx.state_dir).selection.one_min_exclusions == frozenset()
+
+    run_pilot(scenario)
+
+
+def test_demo_rename_reorder_sort_default_refresh_preserve_exclusions() -> None:
+    """Only deselect and m itself touch the exclusion set; everything else preserves it."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        ctx = app.ctx
+        await pilot.pause()
+        await pilot.press("j")
+        await pilot.press("m")
+        await pilot.pause()
+        excluded = frozenset({"claude-opus-4-6"})
+        assert ctx.selection.one_min_exclusions == excluded
+
+        # Rename keeps raw IDs and the exclusion set; the new label persists.
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, RenameModal)
+        modal = app.screen
+        modal.query_one("#rename-input", Input).value = "新标签"
+        modal.query_one("#description-input", Input).value = "新描述"
+        await pilot.press("enter")  # label -> description
+        await pilot.press("enter")  # description -> save
+        await pilot.pause()
+        assert not isinstance(app.screen, RenameModal)
+        renamed = next(o for o in ctx.selection.options if o.model == "claude-opus-4-6")
+        assert renamed.label == "新标签"
+        assert renamed.description == "新描述"
+        assert ctx.selection.one_min_exclusions == excluded
+        saved_state = load_state(ctx.state_dir)
+        assert saved_state.selection.one_min_exclusions == excluded
+        saved_option = next(
+            o for o in saved_state.selection.options if o.model == "claude-opus-4-6"
+        )
+        assert saved_option.label == "新标签"
+        assert saved_option.description == "新描述"
+
+        # Reorder (ctrl+↓ on a selected row) preserves the set.
+        await pilot.press("ctrl+down")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == excluded
+
+        # Sort toggle persists selection together with the exclusion set.
+        await pilot.press("s")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == excluded
+        assert load_state(ctx.state_dir).selection.one_min_exclusions == excluded
+        await pilot.press("s")
+        await pilot.pause()
+
+        # An excluded default emits its raw ID (no suffix appended).
+        await pilot.press("d")
+        await pilot.pause()
+        assert ctx.selection.default_edit == DefaultEdit("set", "claude-opus-4-6")
+        assert ctx.selection.output_model_id("claude-opus-4-6") == "claude-opus-4-6"
+
+        # Demo refresh (r) rebuilds the catalog and never touches the set.
+        await pilot.press("r")
+        await pilot.pause()
+        assert ctx.selection.one_min_exclusions == excluded
+        assert ctx.catalog is not None
+
+    run_pilot(scenario)
+
+
+def test_demo_preview_translates_one_min_warning_for_chinese_ui() -> None:
+    """The preview modal renders the [1m] warning in Chinese, not core English."""
+
+    async def scenario(app: CCModelsApp, pilot) -> None:
+        from textual.widgets import Static
+
+        await pilot.pause()
+        text, _preview = app._preview_text()
+        assert "客户端窗口声明" in text
+        assert "output suffix" not in text
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, PreviewModal)
+        body = str(app.screen.query_one("#preview-text", Static).render())
+        assert "客户端窗口声明" in body
 
     run_pilot(scenario)

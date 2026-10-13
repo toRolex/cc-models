@@ -271,6 +271,10 @@ class Selection:
     options: list[PickerOption] = field(default_factory=list)
     default_edit: DefaultEdit = PRESERVE_DEFAULT
     replace_built_in: bool | None = None
+    # Raw IDs that are written without the default [1m] output suffix.
+    # Local-only policy, persisted inside the selection JSON; never an
+    # official option field. Empty set means every selected model gets [1m].
+    one_min_exclusions: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         self.validate()
@@ -295,6 +299,28 @@ class Selection:
             )
         if self.replace_built_in is not None and not isinstance(self.replace_built_in, bool):
             raise SelectionError("replace_built_in must be a boolean or null")
+        exclusions = self.one_min_exclusions
+        if not isinstance(exclusions, frozenset):
+            raise SelectionError("one_min_exclusions must be a frozenset of raw model IDs")
+        for item in exclusions:
+            if not isinstance(item, str) or not item:
+                raise SelectionError("one_min_exclusions entries must be nonempty strings")
+            if item not in seen:
+                raise SelectionError(f"one_min_exclusions entry is not a selected raw ID: {item}")
+
+    def output_model_id(self, raw_id: str) -> str:
+        """The single [1m] output-suffix rule, applied at the settings boundary.
+
+        Excluded IDs are returned unchanged. IDs that already end with a
+        case-insensitive ``[1m]`` suffix keep their literal form (a native
+        suffix is never stripped or duplicated). Everything else gets a
+        lowercase ``[1m]`` appended.
+        """
+        if raw_id in self.one_min_exclusions:
+            return raw_id
+        if raw_id.casefold().endswith("[1m]"):
+            return raw_id
+        return f"{raw_id}[1m]"
 
     @property
     def ids(self) -> list[str]:
@@ -308,6 +334,11 @@ class Selection:
         }
         if self.replace_built_in is not None:
             out["replace_built_in"] = self.replace_built_in
+        if self.one_min_exclusions:
+            # Contract: stable output follows selection order, not set order.
+            out["one_min_exclusions"] = [
+                option.model for option in self.options if option.model in self.one_min_exclusions
+            ]
         return out
 
     @classmethod
@@ -325,6 +356,16 @@ class Selection:
         selection = cls(options=options, default_edit=default_edit)
         if "replace_built_in" in obj:
             selection.replace_built_in = obj["replace_built_in"]
+        if "one_min_exclusions" in obj:
+            raw = obj["one_min_exclusions"]
+            if not isinstance(raw, list):
+                raise SelectionError("one_min_exclusions must be a list of raw model IDs")
+            for item in raw:
+                if not isinstance(item, str) or not item:
+                    raise SelectionError("one_min_exclusions entries must be nonempty strings")
+            if len(set(raw)) != len(raw):
+                raise SelectionError("one_min_exclusions entries must be unique")
+            selection.one_min_exclusions = frozenset(raw)
         selection.validate()
         return selection
 

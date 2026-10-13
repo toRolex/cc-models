@@ -120,8 +120,9 @@ def test_list_shows_selection_and_no_secrets(tmp_path):
     settings = write_settings(tmp_path, SETTINGS)
     result = run_cli("--settings", str(settings), "--state-dir", str(tmp_path / "state"), "list")
     assert result.returncode == 0
-    assert "claude-opus-4-6 — Opus" in result.stdout
-    assert "custom-proxy-model — 自定义" in result.stdout
+    # Imported selections follow the default [1m] output policy.
+    assert "claude-opus-4-6（输出: claude-opus-4-6[1m]） — Opus" in result.stdout
+    assert "custom-proxy-model（输出: custom-proxy-model[1m]） — 自定义" in result.stdout
     assert "端点: http://127.0.0.1:2317/v1（来源: 设置文件 ANTHROPIC_BASE_URL）" in result.stdout
     assert "启动时从设置文件 modelPicker 导入" in result.stdout
     assert SECRET_TOKEN not in result.stdout
@@ -287,9 +288,10 @@ def test_apply_yes_writes_backup_and_preserves_unrelated(tmp_path):
     after = json.loads(settings.read_text())
     assert after["ANTHROPIC_AUTH_TOKEN"] == SECRET_TOKEN  # preserved, untouched
     assert after["numParallelServers"] == 2
+    # Emitted output IDs carry the default [1m] suffix; raw IDs stay local.
     assert after["modelPicker"] == {
         "replaceBuiltInOptions": True,
-        "options": [{"model": "claude-opus-4-6", "label": "Opus 真实"}],
+        "options": [{"model": "claude-opus-4-6[1m]", "label": "Opus 真实"}],
     }
     backups = list(tmp_path.glob("settings.json.cc-models-backup-*"))
     assert len(backups) == 1 and backups[0].read_text() == before
@@ -444,3 +446,71 @@ def test_restore_strict_object_preview_friendly_refusal(tmp_path, content, confi
     assert "错误" in result.stdout
     assert "Traceback" not in result.stderr
     assert settings.read_bytes() == before
+
+
+# ------------------------------------------------- 1m exclusions (list/apply)
+
+
+def _exclusion_state(state_dir: Path) -> None:
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "selection": {
+                    "default_edit": {"kind": "preserve", "value": None},
+                    "options": [
+                        {"model": "claude-opus-4-6", "label": "Opus 真实"},
+                        {"model": "custom-proxy-model", "label": "自定义"},
+                    ],
+                    "one_min_exclusions": ["claude-opus-4-6"],
+                },
+            }
+        )
+    )
+
+
+def test_list_shows_one_min_exclusion_marker_and_emitted_id(tmp_path):
+    settings = write_settings(tmp_path, SETTINGS)
+    state_dir = tmp_path / "state"
+    _exclusion_state(state_dir)
+    result = run_cli("--settings", str(settings), "--state-dir", str(state_dir), "list")
+    assert result.returncode == 0
+    # Excluded raw ID: no emitted suffix shown, and the 不加 1m marker appears.
+    assert "1. claude-opus-4-6 — Opus 真实  [不加 1m]" in result.stdout
+    # Non-excluded ID shows the actual emitted output ID.
+    assert "2. custom-proxy-model（输出: custom-proxy-model[1m]） — 自定义" in result.stdout
+    assert SECRET_TOKEN not in result.stdout
+
+
+def test_apply_dry_run_then_yes_excluded_stays_raw_others_suffixed(tmp_path):
+    settings = write_settings(tmp_path, SETTINGS)
+    state_dir = tmp_path / "state"
+    _exclusion_state(state_dir)
+    before_dry = settings.read_text()
+    dry = run_cli("--settings", str(settings), "--state-dir", str(state_dir), "apply", "--dry-run")
+    assert dry.returncode == 0, dry.stdout + dry.stderr
+    # Dry-run must not write the settings file.
+    assert settings.read_text() == before_dry
+    # The preview shows emitted IDs: excluded raw, default-suffixed otherwise.
+    assert '"model": "claude-opus-4-6"' in dry.stdout
+    assert '"model": "custom-proxy-model[1m]"' in dry.stdout
+    assert "警告" in dry.stdout  # [1m] client-window declaration warning
+    assert SECRET_TOKEN not in dry.stdout
+
+    yes = run_cli("--settings", str(settings), "--state-dir", str(state_dir), "apply", "--yes")
+    assert yes.returncode == 0, yes.stdout + dry.stderr
+    after = json.loads(settings.read_text())
+    options = {opt["model"] for opt in after["modelPicker"]["options"]}
+    # Excluded raw ID written verbatim; the others carry the [1m] suffix.
+    assert "claude-opus-4-6" in options
+    assert "custom-proxy-model[1m]" in options
+    # Raw membership: the excluded raw ID stays in the local state's set.
+    saved = json.loads((state_dir / "state.json").read_text())
+    assert saved["selection"]["one_min_exclusions"] == ["claude-opus-4-6"]
+    # Parse the managed-changes JSON printed by dry-run (JSON starts at '{').
+    decoder = json.JSONDecoder()
+    start = dry.stdout.index("{")
+    dry_managed, _ = decoder.raw_decode(dry.stdout[start:])
+    # Dry-run preview and the written file agree on the managed output.
+    assert dry_managed["modelPicker"]["after"]["options"] == after["modelPicker"]["options"]

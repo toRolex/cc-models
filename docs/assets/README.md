@@ -1,34 +1,28 @@
-# docs/assets 来源说明
+# README 图片来源与复现
 
-本目录存放 README 引用的图标与界面截图，均不参与打包（包内不含 `docs/`），版本升级不需要重新发布。
+本目录的图标与界面截图不参与打包，修改图片不需要发布新的工具版本。
 
 ## 图标
 
-- `icon.png`（512×512）与 `icon-128.png`（128×128）：由图像生成模型（gpt-image-2.5，内置图像生成）按以下提示词生成后导出的位图，512 版由 1254×1254 原图用 `sips -Z 512` 重采样得到，128 版由原图缩放得到：
+`icon.png`（512×512）与 `icon-128.png`（128×128）来自内置生图工具 **gpt-image-2.5** 生成的同一张原图，经 `sips` 重采样。原始生成文件保留在本地 `.pi/images/12cf4fe1-1ca8-4d1d-8c28-c0dd81f5fe32.png`，不纳入发布包。
 
-  > Use case: logo-brand. Asset type: cc-models open-source terminal CLI project icon for README. Create one original square icon, no letters or text, no watermark. A compact rounded terminal window contains three horizontal model-selection rows and a distinctive checkmark on the middle row, with a small prompt chevron. Flat vector-like geometry, precise thick lines, excellent small-size legibility. Deep navy rounded-square background with lavender and mint accents inspired by a terminal dark theme. Minimal, restrained professional developer-tool identity. Centered symbol with generous padding. Avoid Claude starburst, CC Switch branding, robots, brains, complex gradients or 3D effects.
+完整提示词：
 
-- 生成的原始 1254×1254 位图保留在本地未跟踪的 `.pi/images/` 目录，仓库内只保留 512 与 128 两个派生版本。
+> Use case: logo-brand. Asset type: replacement README app icon for cc-models, an open-source terminal tool for selecting upstream AI models and writing a model menu. Create one polished original square icon, no text, no letters, no watermark. Subject: a beautifully simplified dark terminal tile with three stacked model-option rows, the middle option distinctly selected by a mint checkmark and lavender highlight; a tiny terminal prompt chevron integrates into the header. Design should be substantially fresh and more refined than generic list clipart: confident bold geometric silhouette, balanced compact composition, rounded corners, minimal depth and crisp edges. Color palette: warm charcoal / very dark navy background, soft violet and luminous mint accents, subtle off-white highlights. Large central symbol with generous safe padding, excellent readability at 128px and 64px, professional restrained developer-tool identity. Render a single finished square icon filling the image, not a contact sheet or presentation mockup. Avoid robots, brains, Claude starburst, CC Switch logos, complex gradients, fine decorative details, photorealistic devices, drop shadows outside tile.
 
-## 截图
+## 真实界面截图
 
-- `screenshot-model-list.png` / `.svg`：模型列表主界面，含重命名后的显示名。
-- `screenshot-preview.png` / `.svg`：按 `p` 后的应用预览弹窗。
+- `screenshot-model-list.png` / `.svg`：勾选、显示名称和描述编辑、显式默认模型，以及通过 `m` 勾选「不加 1m」的排除列；终端尺寸 120×16。
+- `screenshot-preview.png` / `.svg`：按 `p` 打开的真实应用预览；终端尺寸 120×66。
 
-截图流程：在演示模式（`--demo`，临时配置、固定演示数据、不访问网络）下通过 Textual Pilot 驱动真实 TUI，用 `app.export_screenshot()` 导出 SVG，再由外部命令转成 PNG：
+截图使用 `build_demo_context()` 的临时配置与固定模型，不访问网络、不修改真实 Claude Code 配置，也不执行应用。由 Textual Pilot 操作真实 TUI，`app.export_screenshot()` 导出 SVG，再由系统 `rsvg-convert` 转成 PNG。不是生图模型生成的界面，也不是系统窗口截图。
+
+在仓库根目录复现（系统需安装 librsvg 提供的 `rsvg-convert`）：
 
 ```sh
-# SVG -> PNG（需要系统安装 librsvg 的 rsvg-convert，非 Python 依赖）
-rsvg-convert -w 1600 screenshot-model-list.svg -o screenshot-model-list.png
-rsvg-convert -w 1600 screenshot-preview.svg -o screenshot-preview.png
+env -u UV_INDEX uv run --locked python scripts/export_readme_screenshots.py
+rsvg-convert -w 1600 docs/assets/screenshot-model-list.svg -o docs/assets/screenshot-model-list.png
+rsvg-convert -w 1600 docs/assets/screenshot-preview.svg -o docs/assets/screenshot-preview.png
 ```
 
-演示模式下的操作序列与导出断言（复现脚本存于仓库外的会话临时目录，未纳入仓库，避免依赖易变的运行时内部属性）：
-
-1. 启动 `CCModelsApp(build_demo_context())`，`run_test(size=(110, 30))`。
-2. 断言光标行模型 ID 为 `claude-opus-4-6`；按 `d` 设默认、`e` 重命名输入 `Opus (renamed)` 回车保存。
-3. 导出第一张 SVG，断言内容含 `renamed`，且无弹窗打开。
-4. `j j` 移动到未选中的 `claude-sonnet-4-6` 行，按空格选中并断言选中状态。
-5. 按 `p` 打开应用预览，导出第二张 SVG，断言内容含 `应用预览`。
-
-SVG 是截图的原始记录；PNG 由 SVG 转换得到。README 中的截图均为演示数据，不含真实模型目录或凭据。
+导出脚本会断言模型选择、默认值、重命名、「不加 1m」排除状态和预览弹窗中的输出 ID 与警告，并在结束后清理临时演示目录。PNG 是 SVG 的派生展示版本，SVG 保留真实界面的导出记录。

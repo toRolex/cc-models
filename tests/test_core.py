@@ -442,14 +442,16 @@ def test_import_preserves_optional_fields_and_never_generates_behaves_as(tmp_pat
     assert rebuilt["replaceBuiltInOptions"] is False  # imported toggle preserved
     assert rebuilt["options"][0]["behavesAs"] == "claude-sonnet-4-6"  # imported only
     assert "behavesAs" not in rebuilt["options"][1]  # never generated
-    assert rebuilt["options"][1] == {"model": "claude-opus-4-6", "label": "Opus"}
+    # default [1m] output policy applies at the picker boundary
+    assert rebuilt["options"][0]["model"] == "ccs-custom-model[1m]"
+    assert rebuilt["options"][1] == {"model": "claude-opus-4-6[1m]", "label": "Opus"}
 
 
 def test_build_model_picker_defaults_replace_built_in_true():
     picker = build_model_picker(Selection(options=[PickerOption("m1", "One")]))
     assert picker == {
         "replaceBuiltInOptions": True,
-        "options": [{"model": "m1", "label": "One"}],
+        "options": [{"model": "m1[1m]", "label": "One"}],
     }
 
 
@@ -494,8 +496,12 @@ def test_apply_preserves_unrelated_settings_and_backs_up_privately(tmp_path):
     assert after.data["modelPicker"] == {
         "replaceBuiltInOptions": True,
         "options": [
-            {"model": "claude-opus-4-6", "label": "Opus"},
-            {"model": "claude-sonnet-4-6", "label": "Sonnet", "description": "balanced"},
+            {"model": "claude-opus-4-6[1m]", "label": "Opus"},
+            {
+                "model": "claude-sonnet-4-6[1m]",
+                "label": "Sonnet",
+                "description": "balanced",
+            },
         ],
     }
     assert "model" not in after.data  # preserve never invents a default
@@ -665,7 +671,7 @@ def test_unknown_option_field_never_leaks_to_state_or_preview_but_survives_apply
     assert before_options[0]["api_key"] == "<unknown field redacted>"
     assert after_options[0]["api_key"] == "<unknown field redacted>"
     # documented fields keep their values in the preview
-    assert after_options[0]["model"] == "claude-opus-4-6"
+    assert after_options[0]["model"] == "claude-opus-4-6[1m]"
     assert after_options[0]["label"] == "Opus 改名"
 
     # apply merges the unknown field back by original raw ID (preservation)
@@ -673,7 +679,7 @@ def test_unknown_option_field_never_leaks_to_state_or_preview_but_survives_apply
     assert result.applied is True
     applied = read_snapshot(path).data["modelPicker"]["options"][0]
     assert applied["api_key"] == secret_value  # preserved in the FILE on apply
-    assert applied["model"] == "claude-opus-4-6"
+    assert applied["model"] == "claude-opus-4-6[1m]"
     # apply preview result is redacted too
     assert secret_value not in json.dumps(result.managed_changes)
 
@@ -757,9 +763,9 @@ def test_default_removal_and_set_rules(tmp_path):
     result2 = apply_selection(snapshot2, explicit, tmp_path)
     assert result2.managed_changes["model"] == {
         "before": "claude-haiku-4-5",
-        "after": "claude-opus-4-6",
+        "after": "claude-opus-4-6[1m]",
     }
-    assert read_snapshot(path).data["model"] == "claude-opus-4-6"
+    assert read_snapshot(path).data["model"] == "claude-opus-4-6[1m]"
 
     # a set default outside the selection is refused (no dangling default)
     with pytest.raises(SelectionError, match="outside the selection"):
@@ -795,7 +801,7 @@ def test_missing_entries_flagged_but_retained(tmp_path, fixture_catalog_payload)
     preview = preview_apply(snapshot, selection, catalog=catalog)
     assert "missing from catalog (kept in selection): custom-proxy-model" in preview.warnings
     options = preview.managed_changes["modelPicker"]["after"]["options"]
-    assert {"model": "custom-proxy-model", "label": "Custom"} in options  # retained
+    assert {"model": "custom-proxy-model[1m]", "label": "Custom"} in options  # retained
     assert catalog.missing_from(selection) == ["custom-proxy-model"]
 
 
