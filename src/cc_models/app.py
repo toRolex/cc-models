@@ -13,9 +13,12 @@ p 预览 · a 确认应用 · c 端点配置 · Ctrl+P 命令/主题面板 · q 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from rich.color import Color
@@ -34,11 +37,13 @@ from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, S
 from .catalog import fetch_catalog
 from .domain import (
     PRESERVE_DEFAULT,
+    Catalog,
     CoreError,
     DefaultEdit,
     DriftError,
     EndpointError,
     PickerOption,
+    Selection,
     normalize_endpoint,
 )
 from .settings import preview_apply
@@ -418,6 +423,97 @@ class DriftModal(ModalScreen[str]):
         self.dismiss("cancel")
 
 
+RowMeta = tuple[str, bool, bool]  # (model_id, selected, missing)
+
+
+class EmptyReason(StrEnum):
+    """Why the model table has no rows to show."""
+
+    NO_CATALOG = "no_catalog"
+    FETCHING = "fetching"
+    FETCH_FAILED = "fetch_failed"
+    CATALOG_EMPTY = "catalog_empty"
+    FILTERED = "filtered"
+
+
+EMPTY_TEXT: Mapping[EmptyReason, str] = MappingProxyType(
+    {
+        EmptyReason.NO_CATALOG: "尚无目录缓存 · 按 r 拉取模型目录",
+        EmptyReason.FETCHING: "正在拉取模型目录…",
+        EmptyReason.FETCH_FAILED: "目录拉取失败 · 按 r 重试",
+        EmptyReason.CATALOG_EMPTY: "上游未返回任何模型 · 按 r 重试",
+        EmptyReason.FILTERED: "没有匹配的模型 · 按 / 修改过滤",
+    }
+)
+
+
+class FetchState(StrEnum):
+    """Lifecycle of the current endpoint's refresh worker."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class TableView:
+    """The rendered rows plus, only when there are none, the empty-state reason."""
+
+    rows: list[RowMeta]
+    reason: EmptyReason | None
+
+    def __post_init__(self) -> None:
+        if self.rows and self.reason is not None:
+            raise ValueError("rows imply reason is None")
+        if not self.rows and self.reason is None:
+            raise ValueError("no rows implies a reason")
+
+
+def project_table(
+    selection: Selection,
+    catalog: Catalog | None,
+    filter_text: str,
+    fetch_state: FetchState,
+) -> TableView:
+    """Derive the visible rows and, when there are none, why the table is empty.
+
+    The reason is the first match in this order: rows visible, a filter hid
+    real rows, a refresh running, the last refresh failed, no catalog, an
+    empty catalog.
+    """
+    selected = {opt.model: opt for opt in selection.options}
+    ordered: list[RowMeta] = []
+    for opt in selection.options:
+        missing = catalog is not None and not catalog.contains(opt.model)
+        ordered.append((opt.model, True, missing))
+    if catalog is not None:
+        for model_id in catalog.model_ids:
+            if model_id not in selected:
+                ordered.append((model_id, False, False))
+
+    needle = filter_text.casefold()
+    visible = [
+        (mid, sel, miss)
+        for mid, sel, miss in ordered
+        if not needle
+        or needle in mid.casefold()
+        or (sel and needle in selected[mid].label.casefold())
+        or (sel and needle in (selected[mid].description or "").casefold())
+    ]
+
+    if visible:
+        return TableView(visible, None)
+    if ordered:
+        return TableView([], EmptyReason.FILTERED)
+    if fetch_state is FetchState.RUNNING:
+        return TableView([], EmptyReason.FETCHING)
+    if fetch_state is FetchState.FAILED:
+        return TableView([], EmptyReason.FETCH_FAILED)
+    if catalog is None:
+        return TableView([], EmptyReason.NO_CATALOG)
+    return TableView([], EmptyReason.CATALOG_EMPTY)
+
+
 class CCModelsApp(App):
     TITLE = "cc-models — CPA 模型选择器"
     CSS = """
@@ -469,6 +565,9 @@ class CCModelsApp(App):
         color: $primary; background: $panel;
     }
     App:ansi FooterKey, App:ansi FooterKey:hover { background: ansi_default; }
+    App:ansi #empty {
+        height: 1; padding: 0 1; color: $text-muted; background: ansi_default;
+    }
     App:ansi #filter {
         height: 1; margin: 0 1; padding: 0 1; border: none;
         background: ansi_default; color: $text;
@@ -546,14 +645,16 @@ class CCModelsApp(App):
         Binding("ctrl+p", "command_palette", "命令/主题", show=False, key_display="^p"),
     ]
 
-    def __init__(self, ctx: SessionContext) -> None:
+    def __init__(self, ctx: SessionContext, *, fetch_on_start: bool = False) -> None:
         super().__init__()
         self.ctx = ctx
+        self._fetch_on_start = fetch_on_start
         self._filter_text = ""
         self._refresh_generation = 0
+        self._fetch_state = FetchState.IDLE
         self.register_theme(MOCHA_ANSI_THEME)
         self.theme = MOCHA_ANSI_THEME.name
-        self._row_metas: list[tuple[str, bool, bool]] = []  # (model_id, selected, missing)
+        self._row_metas: list[RowMeta] = []  # (model_id, selected, missing)
 
     @property
     def available_themes(self) -> dict[str, Theme]:
@@ -571,6 +672,7 @@ class CCModelsApp(App):
     def compose(self) -> ComposeResult:
         yield Static("cc-models — CPA 模型选择器", id="title")
         yield FilterInput(placeholder="过滤（/ 聚焦，Esc 返回表格）…", id="filter")
+        yield Static("", id="empty")
         yield ModelTable(id="table")
         yield Static("", id="status")
         yield Footer()
@@ -588,14 +690,24 @@ class CCModelsApp(App):
             )
         self._rebuild_table()
         table.focus()
+        if self._fetch_on_start and not self.ctx.demo and self.ctx.catalog is None:
+            self.action_refresh()
         if self.ctx.imported_from_settings:
             self.notify("已从设置文件导入初始选择（本地状态此前为空）")
 
-    def _focused_meta(self) -> tuple[str, bool, bool] | None:
+    def _focused_meta(self) -> RowMeta | None:
         table = self.query_one("#table", ModelTable)
         if self._row_metas and 0 <= table.cursor_row < len(self._row_metas):
             return self._row_metas[table.cursor_row]
         return None
+
+    def _update_empty(self, reason: EmptyReason | None) -> None:
+        empty = self.query_one("#empty", Static)
+        if reason is None:
+            empty.display = False
+        else:
+            empty.update(EMPTY_TEXT[reason])
+            empty.display = True
 
     def _rebuild_table(self) -> None:
         table = self.query_one("#table", ModelTable)
@@ -603,24 +715,10 @@ class CCModelsApp(App):
         focused_id = focused[0] if focused is not None else None
         old_cursor_row = table.cursor_row
         selected = {opt.model: opt for opt in self.ctx.selection.options}
-        ordered: list[tuple[str, bool, bool]] = []
-        for opt in self.ctx.selection.options:
-            missing = self.ctx.catalog is not None and not self.ctx.catalog.contains(opt.model)
-            ordered.append((opt.model, True, missing))
-        if self.ctx.catalog is not None:
-            for model_id in self.ctx.catalog.model_ids:
-                if model_id not in selected:
-                    ordered.append((model_id, False, False))
-
-        needle = self._filter_text.casefold()
-        visible = [
-            (mid, sel, miss)
-            for mid, sel, miss in ordered
-            if not needle
-            or needle in mid.casefold()
-            or (sel and needle in selected[mid].label.casefold())
-            or (sel and needle in (selected[mid].description or "").casefold())
-        ]
+        view = project_table(
+            self.ctx.selection, self.ctx.catalog, self._filter_text, self._fetch_state
+        )
+        visible = view.rows
         self._row_metas = visible
         visible_indices = {
             model_id: index for index, (model_id, _selected, _missing) in enumerate(visible)
@@ -656,6 +754,8 @@ class CCModelsApp(App):
             else:
                 row = max(0, min(old_cursor_row, len(visible) - 1))
             table.move_cursor(row=row)
+
+        self._update_empty(view.reason)
 
         status = self.query_one("#status", Static)
         resolution_hint = (
@@ -811,6 +911,8 @@ class CCModelsApp(App):
             self.notify("端点无效，请重新配置", severity="error")
             return
         api_key, _source = resolve_api_key(self.ctx, resolution)
+        self._fetch_state = FetchState.RUNNING
+        self._rebuild_table()
         self.notify(f"正在从 {resolution.raw} 刷新…")
         self._refresh_worker(resolution.raw, resolution.allow_insecure_http, api_key)
 
@@ -841,6 +943,8 @@ class CCModelsApp(App):
         if generation != self._refresh_generation or resolution.raw != endpoint:
             return
         if error is not None:
+            self._fetch_state = FetchState.FAILED
+            self._rebuild_table()
             self.notify(f"刷新失败: {error}", severity="error")
             self.notify("本地选择保持不变", severity="warning")
             return
@@ -849,8 +953,11 @@ class CCModelsApp(App):
         try:
             record_fetch(self.ctx.state_dir, catalog, self.ctx.selection)
         except CoreError as exc:
+            self._fetch_state = FetchState.FAILED
+            self._rebuild_table()
             self.notify(f"保存目录失败: {exc}", severity="error")
             return
+        self._fetch_state = FetchState.IDLE
         self.ctx.refresh_state()
         self.ctx.catalog = catalog
         self._rebuild_table()
@@ -921,6 +1028,8 @@ class CCModelsApp(App):
         from .session import resolve_endpoint
 
         resolution = resolve_endpoint(self.ctx)
+        self._refresh_generation += 1
+        self._fetch_state = FetchState.IDLE
         self.ctx.catalog = self.ctx.catalog_for_current_endpoint(
             resolution.raw, resolution.allow_insecure_http
         )
@@ -979,6 +1088,7 @@ class CCModelsApp(App):
             self.notify(f"保存配置失败: {exc}", severity="error")
             return
         self._refresh_generation += 1
+        self._fetch_state = FetchState.IDLE
         self.ctx.refresh_state()
         self.ctx.selection = self.ctx.state.selection
         self.ctx.catalog = self.ctx.catalog_for_current_endpoint(
@@ -991,4 +1101,4 @@ class CCModelsApp(App):
 
 
 def run_app(ctx: SessionContext) -> None:
-    CCModelsApp(ctx).run()
+    CCModelsApp(ctx, fetch_on_start=True).run()
