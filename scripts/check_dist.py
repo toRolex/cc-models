@@ -24,6 +24,7 @@ SDIST_WHITELIST = (
     "tests/",
     "scripts/",
     "README.md",
+    "LICENSE",
     "pyproject.toml",
     "uv.lock",
     ".gitignore",
